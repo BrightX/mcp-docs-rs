@@ -27,6 +27,8 @@ pub enum ItemKind {
     Keyword,
     Derive,
     ProcMacro,
+    /// 属性宏（如 `#[tool_router]`），对应 `attr.*.html`。
+    Attribute,
     // —— 成员子条目 ——
     Method,
     TyMethod,
@@ -58,6 +60,7 @@ impl ItemKind {
             "keyword" => Self::Keyword,
             "derive" => Self::Derive,
             "proc_macro" => Self::ProcMacro,
+            "attr" => Self::Attribute,
             _ => return None,
         };
         Some(kind)
@@ -86,6 +89,7 @@ impl ItemKind {
             "keywords" => Self::Keyword,
             "derives" => Self::Derive,
             "proc_macros" => Self::ProcMacro,
+            "attr" | "attributes" => Self::Attribute,
             _ => return None,
         };
         Some(kind)
@@ -109,6 +113,7 @@ impl ItemKind {
             Self::Keyword => "keyword",
             Self::Derive => "derive",
             Self::ProcMacro => "proc_macro",
+            Self::Attribute => "attr",
             Self::Method | Self::TyMethod => "method",
             Self::AssocConst => "associatedconstant",
             Self::AssocType => "associatedtype",

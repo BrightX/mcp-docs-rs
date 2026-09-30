@@ -139,6 +139,7 @@ fn kind_label(kind: ItemKind) -> &'static str {
         ItemKind::Keyword => "keyword",
         ItemKind::Derive => "derive macro",
         ItemKind::ProcMacro => "proc macro",
+        ItemKind::Attribute => "attribute macro",
         ItemKind::Method => "method",
         ItemKind::TyMethod => "required method",
         ItemKind::AssocConst => "associated constant",

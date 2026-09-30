@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use scraper::{ElementRef, Html, Selector};
+use scraper::{ElementRef, Html, Node, Selector};
 
 use crate::error::{Error, Result};
 use crate::model::{DocItem, ItemId, ItemKind, Section, SourceRef};
@@ -42,7 +42,7 @@ pub fn parse_item_html(html: &str, rel_path: &Path, opts: &ParseOptions) -> Resu
     let signature = main
         .select(&selector("pre.rust.item-decl"))
         .next()
-        .map(|el| clean_signature(&el.text().collect::<String>()))
+        .map(|el| clean_signature(&signature_text(&el)))
         .filter(|text| !text.is_empty());
 
     let source = main
@@ -262,13 +262,13 @@ fn build_member(
     let signature = anchor
         .select(&selector("h3.code-header, h4.code-header"))
         .next()
-        .map(|el| clean_signature(&el.text().collect::<String>()))
+        .map(|el| clean_signature(&signature_text(&el)))
         .filter(|text| !text.is_empty())
         .or_else(|| {
             anchor
                 .select(&selector("code"))
                 .next()
-                .map(|el| clean_signature(&el.text().collect::<String>()))
+                .map(|el| clean_signature(&signature_text(&el)))
                 .filter(|text| !text.is_empty())
         });
 
@@ -355,6 +355,31 @@ fn docblock_to_md(docblock: &ElementRef) -> String {
 /// rustdoc 会在签名中插入可点击的提示图标（如 `ⓘ`），它们是纯噪声。
 fn clean_signature(text: &str) -> String {
     text.replace('ⓘ', "").trim().to_string()
+}
+
+/// 收集签名文本，跳过 `details` 子树。
+///
+/// rustdoc 的 trait 签名会把方法列表折叠在 `<details>` 内，其 `<summary>`
+/// 文本（如 `Show 29 methods`）不应出现在签名里；方法本身会作为成员单独列出。
+fn signature_text(element: &ElementRef) -> String {
+    let mut out = String::new();
+    collect_text(element, &mut out);
+    out
+}
+
+/// 递归收集文本；`details` 子树整体跳过。
+fn collect_text(element: &ElementRef, out: &mut String) {
+    for child in element.children() {
+        match child.value() {
+            Node::Text(text) => out.push_str(&text.text),
+            Node::Element(inner) if inner.name() == "details" => {}
+            _ => {
+                if let Some(child) = ElementRef::wrap(child) {
+                    collect_text(&child, out);
+                }
+            }
+        }
+    }
 }
 
 /// 由 `<pre>` 的 class 推断代码块语言，默认 `rust`。

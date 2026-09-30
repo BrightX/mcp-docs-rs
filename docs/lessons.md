@@ -96,6 +96,24 @@
 **对**：rustdoc 会在签名中插入可点击的提示图标（`ⓘ`，用于 portability / unstable 提示），文本形如 `JoinHandle<F::Output> ⓘwhere F: …`。需要过滤该字符，否则签名会混入噪声。
 **相关**：`parse.rs::clean_signature`
 
+### #1.14 属性宏不在 `sidebar-items.js` 里
+
+**错**：只从 `sidebar-items.js` 收集条目。
+**对**：属性宏（`#[tool_router]`、`#[tool_handler]` 等）对应 `attr.*.html`，**不出现在 sidebar 中**，于是完全检索不到（真实项目里 `search tool_router` 返回 0 条）。修复方式是扫描目录、把 `{前缀}.{名字}.html` 形式且 sidebar 未列出的条目补进来。
+**相关**：`discover.rs::scan_directory`
+
+### #1.15 宏重定向页没有正文，解析失败必须容错
+
+**错**：`build` 里对每个条目直接 `parse_item_html(...)?`，一处失败就中断整个导出。
+**对**：rustdoc 会为宏重导出生成 `macro.eprint!.html` 这类**重定向页**（约 340 字节，`http-equiv="refresh"`，无 `section#main-content`）。真实项目里这类页面有 141 个，会让导出整体失败。应改为「解析失败则跳过该条目并记录」，不影响其余条目。
+**相关**：`index.rs`（`BuildReport::skipped`）
+
+### #1.16 trait 签名里混入折叠控件文本
+
+**错**：签名直接取 `pre.rust.item-decl` 的 `text()`。
+**对**：rustdoc 把 trait 的方法列表折叠在 `<details>` 里，其 `<summary>` 文本（如 `Show 29 methods`）会混进签名。需要遍历文本时跳过 `details` 子树；方法本身已作为成员单独列出，无需重复。
+**相关**：`parse.rs::signature_text`
+
 ## 2. 文件系统与路径
 
 ### #2.1 文件名绝不能用 `::`

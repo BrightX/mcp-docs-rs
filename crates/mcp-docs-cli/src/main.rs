@@ -183,6 +183,15 @@ fn export(
         report.index.items.len(),
         out_dir.join("index.json").display()
     );
+    if !report.skipped.is_empty() {
+        println!(
+            "跳过 {} 个无法解析的产物（如宏重定向页）：",
+            report.skipped.len()
+        );
+        for entry in report.skipped.iter().take(5) {
+            println!("  - {entry}");
+        }
+    }
     Ok(())
 }
 

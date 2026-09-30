@@ -35,6 +35,11 @@ pub struct BuildReport {
     pub reused: usize,
     /// 写入的 markdown 文件数。
     pub written: usize,
+    /// 解析失败而跳过的条目（`id` 与原因）。
+    ///
+    /// rustdoc 会为宏重导出生成 `macro.foo!.html` 之类的**重定向页**，
+    /// 这类页面没有正文；单个条目失败不应中断整体构建。
+    pub skipped: Vec<String>,
 }
 
 /// 构建索引。
@@ -59,6 +64,7 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
     let mut crates = Vec::new();
     let mut items = Vec::new();
     let (mut parsed, mut reused, mut written) = (0usize, 0usize, 0usize);
+    let mut skipped = Vec::new();
 
     for crate_name in discover::list_crates(doc_root)? {
         if let Some(filter) = &opts.crate_filter {
@@ -104,7 +110,14 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
                 rustdoc_version = parse::parse_rustdoc_meta(&html).map(|(version, _)| version);
             }
 
-            let item = parse::parse_item_html(&html, &entry.html_path, &parse_opts)?;
+            let item = match parse::parse_item_html(&html, &entry.html_path, &parse_opts) {
+                Ok(item) => item,
+                Err(err) => {
+                    // 重定向页等异常产物：跳过该条目，不影响整体构建。
+                    skipped.push(format!("{}：{err}", entry.id));
+                    continue;
+                }
+            };
             parsed += 1;
 
             if opts.write_markdown {
@@ -187,6 +200,7 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
         parsed,
         reused,
         written,
+        skipped,
     })
 }
 

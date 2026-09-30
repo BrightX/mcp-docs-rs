@@ -2,6 +2,7 @@
 //!
 //! 以 `crates.js` 定位 crate，再递归各层 `sidebar-items.js` 构建条目清单。
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -48,7 +49,10 @@ pub fn discover_all(doc_root: &Path) -> Result<Vec<DiscoveredItem>> {
     Ok(out)
 }
 
-/// 递归遍历一个模块目录：读 `sidebar-items.js` 产出当前层条目，再下钻子模块。
+/// 递归遍历一个模块目录：产出当前层条目，再下钻子模块。
+///
+/// `sidebar-items.js` 并不覆盖全部条目（例如属性宏 `attr.*.html` 就不在其中），
+/// 因此还会扫描目录补全。
 ///
 /// `path` 为当前模块的完整路径（含 crate）。
 fn walk_module(
@@ -57,37 +61,49 @@ fn walk_module(
     path: &[String],
     out: &mut Vec<DiscoveredItem>,
 ) -> Result<()> {
-    let Some(groups) = sidebar::parse_sidebar_file(&dir.join("sidebar-items.js"))? else {
-        // 叶模块没有 sidebar-items.js，属正常情况。
-        return Ok(());
-    };
+    let mut entries: Vec<(ItemKind, String)> = Vec::new();
+
+    // 主来源：sidebar-items.js。
+    if let Some(groups) = sidebar::parse_sidebar_file(&dir.join("sidebar-items.js"))? {
+        for (kind, names) in groups {
+            for name in names {
+                entries.push((kind, name));
+            }
+        }
+    }
+
+    // 补全：扫描目录，收入 sidebar 未列出的条目。
+    let known: HashSet<(ItemKind, String)> = entries.iter().cloned().collect();
+    for entry in scan_directory(dir) {
+        if !known.contains(&entry) {
+            entries.push(entry);
+        }
+    }
 
     let mut submodules = Vec::new();
-    for (kind, names) in groups {
-        for name in names {
-            // 模块的页面是子目录下的 index.html，其余条目是 `{前缀}.{名字}.html`。
-            let html_path = if kind == ItemKind::Module {
-                submodules.push(name.clone());
-                dir.join(&name).join("index.html")
-            } else {
-                dir.join(format!("{}.{}.html", kind.file_prefix(), name))
-            };
-            let html_path = html_path
-                .strip_prefix(doc_root)
-                .unwrap_or(&html_path)
-                .to_path_buf();
+    for (kind, name) in entries {
+        // 模块的页面是子目录下的 index.html，其余条目是 `{前缀}.{名字}.html`。
+        let html_path = if kind == ItemKind::Module {
+            submodules.push(name.clone());
+            dir.join(&name).join("index.html")
+        } else {
+            dir.join(format!("{}.{}.html", kind.file_prefix(), name))
+        };
+        let html_path = html_path
+            .strip_prefix(doc_root)
+            .unwrap_or(&html_path)
+            .to_path_buf();
 
-            let mut id_parts = path.to_vec();
-            id_parts.push(name.clone());
+        let mut id_parts = path.to_vec();
+        id_parts.push(name.clone());
 
-            out.push(DiscoveredItem {
-                id: ItemId(id_parts.join("::")),
-                kind,
-                name,
-                path: path.to_vec(),
-                html_path,
-            });
-        }
+        out.push(DiscoveredItem {
+            id: ItemId(id_parts.join("::")),
+            kind,
+            name,
+            path: path.to_vec(),
+            html_path,
+        });
     }
 
     // 先产出当前层全部条目，再下钻子模块，使输出顺序更自然。
@@ -97,4 +113,29 @@ fn walk_module(
         walk_module(&dir.join(&name), doc_root, &child_path, out)?;
     }
     Ok(())
+}
+
+/// 扫描目录下的条目 HTML，返回 `(类型, 名字)`。
+///
+/// 文件名形如 `{前缀}.{名字}.html`；无法识别的文件名（如 `index.html`、
+/// `all.html`）会被忽略。
+fn scan_directory(dir: &Path) -> Vec<(ItemKind, String)> {
+    let mut found = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        let Some(stem) = file_name.strip_suffix(".html") else {
+            continue;
+        };
+        let Some((prefix, name)) = stem.split_once('.') else {
+            continue;
+        };
+        let Some(kind) = ItemKind::from_file_prefix(prefix) else {
+            continue;
+        };
+        found.push((kind, name.to_string()));
+    }
+    found
 }
