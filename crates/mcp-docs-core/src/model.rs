@@ -233,6 +233,9 @@ pub struct ItemSummary {
     pub has_members: bool,
     /// 相对输出根目录的 markdown 路径，统一以 `/` 分隔。
     pub file: String,
+    /// 源 HTML 的修改时间（Unix 毫秒），用于增量判断。
+    #[serde(default)]
+    pub src_mtime: Option<u64>,
 }
 
 /// crate 摘要。

@@ -1,38 +1,118 @@
-//! 构建与读写全量索引。
+//! 构建索引，并可选地渲染 markdown、落盘 index.json 与 meta.json。
 
 use std::fs;
 use std::path::Path;
 
+use crate::cache::{fingerprint_doc_root, path_mtime, write_meta, Meta};
 use crate::discover;
 use crate::error::Result;
+use crate::markdown::{render_item, render_member_item, RenderOptions};
 use crate::model::{CrateSummary, Index, ItemSummary, INDEX_SCHEMA_VERSION};
 use crate::parse::{self, ParseOptions};
 use crate::store::{atomic_write, item_output_path, member_output_path};
 
-/// 扫描 `doc_root` 构建索引。
+/// 构建选项。
+#[derive(Debug, Clone, Default)]
+pub struct BuildOptions {
+    /// 渲染并写入 markdown 文件。
+    pub write_markdown: bool,
+    /// 复用未变化条目（增量）。需要 `out_root/index.json` 存在。
+    pub incremental: bool,
+    /// 把 `index.json` 与 `meta.json` 落盘。
+    pub persist: bool,
+    /// 只处理指定 crate。
+    pub crate_filter: Option<String>,
+}
+
+/// 构建结果。
+#[derive(Debug, Clone)]
+pub struct BuildReport {
+    /// 构建出的索引。
+    pub index: Index,
+    /// 重新解析的条目数。
+    pub parsed: usize,
+    /// 复用旧索引的条目数。
+    pub reused: usize,
+    /// 写入的 markdown 文件数。
+    pub written: usize,
+}
+
+/// 构建索引。
 ///
-/// `out_root` 仅用于推导条目的 markdown 路径，不要求目录已存在。
-pub fn build_index(doc_root: &Path, out_root: &Path) -> Result<Index> {
+/// `out_root` 用于推导条目的 markdown 路径；`opts.persist` 为真时还会写出
+/// `index.json` 与 `meta.json`。
+pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<BuildReport> {
     let parse_opts = ParseOptions::default();
+    let render_opts = RenderOptions::default();
+
+    // 增量：读取上次索引，用于复用未变化条目。
+    let previous = if opts.incremental {
+        load_index(&out_root.join("index.json")).ok()
+    } else {
+        None
+    };
+    let mut rustdoc_version = previous
+        .as_ref()
+        .and_then(|index| index.rustdoc_version.clone());
+    let previous_items: Vec<ItemSummary> = previous.map(|index| index.items).unwrap_or_default();
+
     let mut crates = Vec::new();
     let mut items = Vec::new();
-    let mut rustdoc_version = None;
+    let (mut parsed, mut reused, mut written) = (0usize, 0usize, 0usize);
 
     for crate_name in discover::list_crates(doc_root)? {
+        if let Some(filter) = &opts.crate_filter {
+            if &crate_name != filter {
+                continue;
+            }
+        }
         let mut item_count = 0;
 
         for entry in discover::discover_crate(doc_root, &crate_name)? {
             let html_path = doc_root.join(&entry.html_path);
+            let mtime = path_mtime(&html_path);
+
+            // 增量：父条目未变则整体复用（含其成员）。
+            let unchanged = previous_items
+                .iter()
+                .find(|summary| summary.id.0 == entry.id.0)
+                .filter(|summary| summary.src_mtime.is_some() && summary.src_mtime == mtime);
+            if let Some(previous) = unchanged {
+                items.push(previous.clone());
+                item_count += 1;
+                reused += 1;
+
+                // 只复用「属于该条目的成员」：成员类型 + id 前缀。
+                // 仅靠前缀会误收子模块下的条目（如模块 `inner` 会收到 `inner::Nested`）。
+                let prefix = format!("{}::", entry.id.0);
+                for member in previous_items
+                    .iter()
+                    .filter(|summary| summary.kind.is_member() && summary.id.0.starts_with(&prefix))
+                {
+                    items.push(member.clone());
+                    item_count += 1;
+                    reused += 1;
+                }
+                continue;
+            }
+
             // 产物缺失时跳过，不影响整体索引。
             let Ok(html) = fs::read_to_string(&html_path) else {
                 continue;
             };
-
             if rustdoc_version.is_none() {
                 rustdoc_version = parse::parse_rustdoc_meta(&html).map(|(version, _)| version);
             }
 
             let item = parse::parse_item_html(&html, &entry.html_path, &parse_opts)?;
+            parsed += 1;
+
+            if opts.write_markdown {
+                let markdown = render_item(&item, &render_opts);
+                let path = item_output_path(out_root, &entry.html_path);
+                atomic_write(&path, markdown.as_bytes())?;
+                written += 1;
+            }
 
             items.push(ItemSummary {
                 id: item.id.clone(),
@@ -43,10 +123,17 @@ pub fn build_index(doc_root: &Path, out_root: &Path) -> Result<Index> {
                 has_docs: item.docs_md.is_some(),
                 has_members: !item.members.is_empty(),
                 file: rel_string(out_root, &item_output_path(out_root, &entry.html_path)),
+                src_mtime: mtime,
             });
             item_count += 1;
 
             for member in &item.members {
+                if opts.write_markdown {
+                    let markdown = render_member_item(member, &render_opts);
+                    let path = member_output_path(out_root, &entry.html_path, &member.name);
+                    atomic_write(&path, markdown.as_bytes())?;
+                    written += 1;
+                }
                 items.push(ItemSummary {
                     id: member.id.clone(),
                     kind: member.kind,
@@ -59,6 +146,7 @@ pub fn build_index(doc_root: &Path, out_root: &Path) -> Result<Index> {
                         out_root,
                         &member_output_path(out_root, &entry.html_path, &member.name),
                     ),
+                    src_mtime: mtime,
                 });
                 item_count += 1;
             }
@@ -71,14 +159,37 @@ pub fn build_index(doc_root: &Path, out_root: &Path) -> Result<Index> {
         });
     }
 
-    Ok(Index {
+    let index = Index {
         schema_version: INDEX_SCHEMA_VERSION,
         rustdoc_version,
         generated_at: unix_now(),
         target_doc: doc_root.to_string_lossy().into_owned(),
         crates,
         items,
+    };
+
+    if opts.persist {
+        write_index(&index, &out_root.join("index.json"))?;
+        let meta = Meta {
+            schema_version: INDEX_SCHEMA_VERSION,
+            rustdoc_version: index.rustdoc_version.clone(),
+            generated_at: index.generated_at,
+            fingerprint: fingerprint_doc_root(doc_root),
+        };
+        write_meta(&meta, &out_root.join("meta.json"))?;
+    }
+
+    Ok(BuildReport {
+        index,
+        parsed,
+        reused,
+        written,
     })
+}
+
+/// 扫描 `doc_root` 构建索引（不写出任何文件）。
+pub fn build_index(doc_root: &Path, out_root: &Path) -> Result<Index> {
+    Ok(build(doc_root, out_root, &BuildOptions::default())?.index)
 }
 
 /// 把索引写入文件（原子写）。

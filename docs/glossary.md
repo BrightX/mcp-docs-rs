@@ -16,7 +16,7 @@
 | #1.4 | 一行摘要、one_line | 条目简介，取自 `<meta name=description>` | `parse.rs::parse_one_line`；写入 `index.rs` |
 | #1.5 | 发现、discover | 从产物目录构建条目清单的过程 | `crates/mcp-docs-core/src/discover.rs` |
 | #1.6 | 索引、index.json | 全量条目的扁平清单，Agent 首读 | `crates/mcp-docs-core/src/index.rs` |
-| #1.7 | 指纹、fingerprint | 判断产物是否变化、是否需要重建 | `crates/mcp-docs-core/src/cache.rs` → `Fingerprint`（规划，M4） |
+| #1.7 | 指纹、fingerprint | 判断产物是否变化、是否需要重建 | `crates/mcp-docs-core/src/cache.rs` → `Fingerprint` |
 | #1.8 | 先搜后读 | 设计原则：搜索只返回轻摘要 + 指针，正文按需读取 | `design.md` §8 |
 | #1.9 | DiscoveredItem | 发现阶段产出的条目（尚未解析正文） | `crates/mcp-docs-core/src/model.rs` → `DiscoveredItem` |
 | #1.10 | 分节、Section | 页面按 `h2.section-header` 切分的区块 | `model.rs` → `Section`；切分 `parse.rs::collect_sections` |
@@ -25,6 +25,9 @@
 | #1.13 | 条目摘要、ItemSummary | 索引里的轻量条目（不含正文） | `crates/mcp-docs-core/src/model.rs` → `ItemSummary` |
 | #1.14 | 检索、search | 在索引中按名字 / 路径 / 摘要检索并排序 | `crates/mcp-docs-core/src/search.rs` → `search` / `rank` |
 | #1.15 | MatchMode | 匹配模式：子串 / 前缀 / 模糊子序列 | `search.rs` → `MatchMode` |
+| #1.16 | 增量、incremental | 复用未变化条目，只重建改动的部分 | `crates/mcp-docs-core/src/index.rs` → `BuildOptions::incremental` |
+| #1.17 | Meta、meta.json | 指纹 + 版本 + 生成时间，用于判断是否重建 | `crates/mcp-docs-core/src/cache.rs` → `Meta` / `is_stale` |
+| #1.18 | DocCache | 按需解析结果的内存缓存（给 MCP server 用） | `crates/mcp-docs-core/src/cache.rs` → `DocCache` |
 
 ## 2. rustdoc 产物（输入数据）
 
@@ -56,3 +59,4 @@
 | #3.10 | 导出、export | 批量落盘 markdown 文件树 | CLI `mcp-docs export`；`store.rs` |
 | #3.11 | 索引模块 | 构建 / 读写 `index.json` | `crates/mcp-docs-core/src/index.rs` |
 | #3.12 | 检索模块 | 检索与排序 | `crates/mcp-docs-core/src/search.rs` |
+| #3.13 | 缓存模块 | 指纹、meta、解析缓存 | `crates/mcp-docs-core/src/cache.rs` |

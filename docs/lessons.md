@@ -72,6 +72,12 @@
 **对**：转换前用占位符抽出 `pre.rust` / `pre.rust-example-rendered`（按 class 判断语言），转换后再还原为 ```rust 围栏；代码内容取 `pre.text()`，避免高亮 `<span>` 干扰。
 **相关**：`parse.rs::docblock_to_md`
 
+### #1.10 增量复用成员不能只看 id 前缀
+
+**错**：复用未变化条目的成员时，用 `summary.id.starts_with("父id::")` 收集。
+**对**：子模块条目的 id 同样带该前缀 —— 模块 `doc_probe::inner` 的前缀会匹配到子条目 `doc_probe::inner::Nested`，而 `Nested` 本身也是独立条目，于是被重复计入（条目数从 11 变 12）。必须再加「是成员类型」的约束（`ItemKind::is_member()`）。
+**相关**：`index.rs` 的增量复用分支
+
 ## 2. 文件系统与路径
 
 ### #2.1 文件名绝不能用 `::`

@@ -8,7 +8,7 @@
 | M1 | 单条目解析 | ✅ 已完成 |
 | M2 | Markdown 渲染 + 链接重写 + 降噪 | ✅ 已完成 |
 | M3 | 索引 + 检索 | ✅ 已完成 |
-| M4 | 缓存 / 增量 / 指纹 | ⬜ 未开始 |
+| M4 | 缓存 / 增量 / 指纹 | ✅ 已完成 |
 | M5 | MCP Server | ⬜ 未开始 |
 | M6 | 打磨 | ⬜ 未开始 |
 
@@ -80,13 +80,18 @@
 ## M4 — 缓存 / 增量 / 指纹
 
 **交付物**
-- `cache.rs`：`fingerprint_doc_root` / `DocCache`（`get_or_parse` / `is_stale` / `invalidate`）。
-- `meta.json` 落盘与 stale 判定（fingerprint / rustdoc 版本 / schema 版本）。
-- `--incremental`：按 `src_mtime` 逐文件比对，仅更新变化项。
+- `cache.rs`：`Fingerprint` / `fingerprint_doc_root` / `Meta` / `is_stale` / `path_mtime` / `DocCache`。
+- 索引与导出统一进 `index.rs::build`（`BuildOptions` / `BuildReport`）。
+- 写出 `meta.json`（指纹 + rustdoc 版本 + schema 版本）；`index.json` 条目带 `src_mtime`。
+- `export --incremental`：复用未变化条目（含其成员），跳过重新解析与重复写盘。
+- 依赖 `walkdir`；测试依赖 `tempfile`。
+- 测试 5 个（`tests/cache.rs`）。
 
-**验收标准**
-- 二次运行不重新解析全部条目。
-- `touch` 一个 html 后，仅该条目重建。
+**验收标准**（均已达成）
+- 二次增量运行「重新解析 0，复用 11，写 0 文件」。
+- 改动单个 html 后仅该页面被重新解析（`parsed == 1`）。
+- 指纹稳定；`meta.json` 缺失或指纹变化时判定为过期。
+- `DocCache` 二次取用返回同一 `Arc`。
 
 ## M5 — MCP Server
 

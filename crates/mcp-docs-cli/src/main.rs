@@ -36,6 +36,9 @@ enum Command {
         /// 只导出指定 crate。
         #[arg(long = "crate")]
         crate_name: Option<String>,
+        /// 增量：复用未变化条目，只重建改动的部分。
+        #[arg(long)]
+        incremental: bool,
     },
     /// 检索条目。
     Search {
@@ -83,7 +86,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     match &cli.command {
         Command::Tree => print_tree(&cli.doc_dir),
         Command::Show { id } => show(&cli.doc_dir, id),
-        Command::Export { crate_name } => export(&cli.doc_dir, &cli.out, crate_name.as_deref()),
+        Command::Export {
+            crate_name,
+            incremental,
+        } => export(&cli.doc_dir, &cli.out, *incremental, crate_name.as_deref()),
         Command::Search {
             query,
             limit,
@@ -154,58 +160,29 @@ fn show(doc_dir: &Path, id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 导出 markdown 文件树，并生成 `index.json`。
-fn export(doc_dir: &Path, out_dir: &Path, crate_filter: Option<&str>) -> anyhow::Result<()> {
-    let items = mcp_docs_core::discover_all(doc_dir)?;
-    let render_opts = mcp_docs_core::RenderOptions::default();
-    let parse_opts = mcp_docs_core::ParseOptions::default();
-    let (mut written, mut skipped) = (0usize, 0usize);
-
-    for discovered in &items {
-        if let Some(filter) = crate_filter {
-            if discovered.id.0.split("::").next() != Some(filter) {
-                continue;
-            }
-        }
-
-        let html_path = doc_dir.join(&discovered.html_path);
-        let html = match std::fs::read_to_string(&html_path) {
-            Ok(html) => html,
-            Err(err) => {
-                eprintln!("跳过 {}：{err}", html_path.display());
-                skipped += 1;
-                continue;
-            }
-        };
-        let item = mcp_docs_core::parse_item_html(&html, &discovered.html_path, &parse_opts)?;
-
-        let markdown = mcp_docs_core::render_item(&item, &render_opts);
-        let out_path = mcp_docs_core::item_output_path(out_dir, &discovered.html_path);
-        mcp_docs_core::atomic_write(&out_path, markdown.as_bytes())?;
-        written += 1;
-
-        for member in &item.members {
-            let markdown = mcp_docs_core::render_member_item(member, &render_opts);
-            let out_path =
-                mcp_docs_core::member_output_path(out_dir, &discovered.html_path, &member.name);
-            mcp_docs_core::atomic_write(&out_path, markdown.as_bytes())?;
-            written += 1;
-        }
-    }
-
-    // 生成索引，供 search 与 MCP server 使用。
-    let index = mcp_docs_core::build_index(doc_dir, out_dir)?;
-    let index_path = out_dir.join("index.json");
-    mcp_docs_core::write_index(&index, &index_path)?;
+/// 导出 markdown 文件树，并生成 `index.json` 与 `meta.json`。
+fn export(
+    doc_dir: &Path,
+    out_dir: &Path,
+    incremental: bool,
+    crate_filter: Option<&str>,
+) -> anyhow::Result<()> {
+    let opts = mcp_docs_core::BuildOptions {
+        write_markdown: true,
+        incremental,
+        persist: true,
+        crate_filter: crate_filter.map(str::to_string),
+    };
+    let report = mcp_docs_core::build(doc_dir, out_dir, &opts)?;
 
     println!(
-        "已导出 {written} 个 markdown 文件，索引 {} 个条目 → {}",
-        index.items.len(),
-        index_path.display()
+        "已导出 {} 个 markdown 文件（重新解析 {}，复用 {}），索引 {} 个条目 → {}",
+        report.written,
+        report.parsed,
+        report.reused,
+        report.index.items.len(),
+        out_dir.join("index.json").display()
     );
-    if skipped > 0 {
-        println!("跳过 {skipped} 个（HTML 读取失败）");
-    }
     Ok(())
 }
 

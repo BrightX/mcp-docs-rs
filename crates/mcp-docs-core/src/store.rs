@@ -32,7 +32,7 @@ pub fn encode_fs_name(name: &str) -> String {
     }
 
     if out.len() > 200 {
-        let hash = fnv1a(&out);
+        let hash = crate::fnv1a(out.as_bytes());
         let mut truncated: String = out.chars().take(180).collect();
         truncated.push_str(&format!("-{hash:08x}"));
         out = truncated;
@@ -101,14 +101,4 @@ fn is_reserved(name: &str) -> bool {
 fn numbered_reserved(stem: &str, prefix: &str) -> bool {
     stem.strip_prefix(prefix)
         .is_some_and(|rest| matches!(rest, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"))
-}
-
-/// FNV-1a 32 位哈希，用于超长名截断后的去重后缀。
-fn fnv1a(text: &str) -> u32 {
-    let mut hash: u32 = 0x811c_9dc5;
-    for byte in text.as_bytes() {
-        hash ^= u32::from(*byte);
-        hash = hash.wrapping_mul(0x0100_0193);
-    }
-    hash
 }
