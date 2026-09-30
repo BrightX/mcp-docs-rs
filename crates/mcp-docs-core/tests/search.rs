@@ -37,7 +37,7 @@ fn summary_files_point_to_markdown() {
     assert_eq!(find("doc_probe::Demo").file, "doc_probe/struct.Demo.md");
     assert_eq!(
         find("doc_probe::Demo::new").file,
-        "doc_probe/struct.Demo.new.md"
+        "doc_probe/struct.Demo.method.new.md"
     );
     assert_eq!(
         find("doc_probe::inner::Nested").file,

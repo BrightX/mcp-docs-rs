@@ -30,6 +30,7 @@
 | #1.18 | DocCache | 按需解析结果的内存缓存（给 MCP server 用） | `crates/mcp-docs-core/src/cache.rs` → `DocCache` |
 | #1.19 | MCP 工具、tool | 暴露给 Agent 的检索能力 | `crates/mcp-docs-server/src/server.rs`（`#[tool]`） |
 | #1.20 | MCP 资源、resource | 以 `rustdoc://` URI 暴露的文档节点 | `server.rs`（`read_resource` / `list_resource_templates`） |
+| #1.21 | 成员文件名 | `{父stem}.{成员类型}.{成员名}.md`（类型用于避免同名冲突） | `store.rs::member_output_path` |
 
 ## 2. rustdoc 产物（输入数据）
 

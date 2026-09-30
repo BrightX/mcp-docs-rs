@@ -42,7 +42,7 @@ pub fn parse_item_html(html: &str, rel_path: &Path, opts: &ParseOptions) -> Resu
     let signature = main
         .select(&selector("pre.rust.item-decl"))
         .next()
-        .map(|el| el.text().collect::<String>().trim().to_string())
+        .map(|el| clean_signature(&el.text().collect::<String>()))
         .filter(|text| !text.is_empty());
 
     let source = main
@@ -262,13 +262,13 @@ fn build_member(
     let signature = anchor
         .select(&selector("h3.code-header, h4.code-header"))
         .next()
-        .map(|el| el.text().collect::<String>().trim().to_string())
+        .map(|el| clean_signature(&el.text().collect::<String>()))
         .filter(|text| !text.is_empty())
         .or_else(|| {
             anchor
                 .select(&selector("code"))
                 .next()
-                .map(|el| el.text().collect::<String>().trim().to_string())
+                .map(|el| clean_signature(&el.text().collect::<String>()))
                 .filter(|text| !text.is_empty())
         });
 
@@ -348,6 +348,13 @@ fn docblock_to_md(docblock: &ElementRef) -> String {
     }
 
     markdown.trim().to_string()
+}
+
+/// 清理签名文本里的 rustdoc 装饰字符。
+///
+/// rustdoc 会在签名中插入可点击的提示图标（如 `ⓘ`），它们是纯噪声。
+fn clean_signature(text: &str) -> String {
+    text.replace('ⓘ', "").trim().to_string()
 }
 
 /// 由 `<pre>` 的 class 推断代码块语言，默认 `rust`。

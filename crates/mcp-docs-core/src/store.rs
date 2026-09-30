@@ -5,6 +5,7 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 use crate::error::Result;
+use crate::model::ItemKind;
 
 /// 清洗文件名，保证跨平台（尤其 Windows）合法。
 ///
@@ -46,18 +47,43 @@ pub fn item_output_path(out_root: &Path, html_rel: &Path) -> PathBuf {
     out_root.join(sanitize_rel(&html_rel.with_extension("md")))
 }
 
-/// 成员 markdown 的输出路径：父文件名 + `.` + 成员名 + `.md`。
+/// 成员 markdown 的输出路径：父文件名 + `.` + 成员类型 + `.` + 成员名 + `.md`。
 ///
-/// 例如父文件 `doc_probe/struct.Demo.html` 的成员 `new`
-/// → `<out_root>/doc_probe/struct.Demo.new.md`。
-pub fn member_output_path(out_root: &Path, parent_html_rel: &Path, member_name: &str) -> PathBuf {
+/// 带成员类型是为了避免同名冲突 —— 例如 `syn::LitBool` 同时有字段 `value`
+/// 与方法 `value()`，只用名字会互相覆盖。
+///
+/// 例如父文件 `syn/struct.LitBool.html` 的字段 `value`
+/// → `<out_root>/syn/struct.LitBool.field.value.md`。
+pub fn member_output_path(
+    out_root: &Path,
+    parent_html_rel: &Path,
+    member_kind: ItemKind,
+    member_name: &str,
+) -> PathBuf {
     let dir = parent_html_rel.parent().unwrap_or_else(|| Path::new(""));
     let stem = parent_html_rel
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let file = format!("{stem}.{}.md", encode_fs_name(member_name));
+    let file = format!(
+        "{stem}.{}.{}.md",
+        member_kind_tag(member_kind),
+        encode_fs_name(member_name)
+    );
     out_root.join(sanitize_rel(dir)).join(file)
+}
+
+/// 成员类型在文件名里的短标记。
+fn member_kind_tag(kind: ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Field => "field",
+        ItemKind::Method => "method",
+        ItemKind::TyMethod => "tymethod",
+        ItemKind::AssocConst => "assocconst",
+        ItemKind::AssocType => "assoctype",
+        ItemKind::Variant => "variant",
+        other => other.file_prefix(),
+    }
 }
 
 /// 原子写入：先写临时文件再 rename，避免读到写了一半的文件。

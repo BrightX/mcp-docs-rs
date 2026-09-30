@@ -57,6 +57,8 @@ struct SearchItemsParams {
 struct ItemParams {
     /// 条目 id，如 `doc_probe::Demo::new`。
     id: String,
+    /// 返回 markdown 的字节上限（超出时按字符边界截断）。
+    max_bytes: Option<usize>,
 }
 
 /// `rebuild_index` 的参数。
@@ -190,14 +192,18 @@ impl DocsServer {
             .find(|item| item.id.0 == params.id)
             .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
         let item = self.load_item(summary)?;
+        let options = RenderOptions::default();
 
         // 成员只返回自身小节，其余返回整篇。
-        if summary.kind.is_member() {
-            if let Some(member) = item.members.iter().find(|member| member.id == summary.id) {
-                return Ok(render_member_item(member, &RenderOptions::default()));
+        let markdown = if summary.kind.is_member() {
+            match item.members.iter().find(|member| member.id == summary.id) {
+                Some(member) => render_member_item(member, &options),
+                None => render_item(&item, &options),
             }
-        }
-        Ok(render_item(&item, &RenderOptions::default()))
+        } else {
+            render_item(&item, &options)
+        };
+        Ok(truncate(markdown, params.max_bytes))
     }
 
     /// 查询条目的源码位置。
@@ -336,8 +342,11 @@ impl DocsServer {
             // rustdoc://{crate}/{item}：item 的 `/` 对应 `::`。
             Some(item) => {
                 let id = format!("{crate_name}::{}", item.replace('/', "::"));
-                self.get_item(Parameters(ItemParams { id }))
-                    .map_err(|message| McpError::invalid_params(message, None))
+                self.get_item(Parameters(ItemParams {
+                    id,
+                    max_bytes: None,
+                }))
+                .map_err(|message| McpError::invalid_params(message, None))
             }
             // rustdoc://{crate}：该 crate 的条目清单。
             None => self.crate_listing(crate_name),
@@ -423,4 +432,19 @@ fn matches_module(item: &ItemSummary, module: Option<&str>) -> bool {
 /// 序列化为带缩进的 JSON 文本。
 fn to_json(value: &serde_json::Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|err| format!("序列化失败：{err}"))
+}
+
+/// 按字节上限截断文本（保证 UTF-8 字符边界），并附带提示。
+fn truncate(text: String, max_bytes: Option<usize>) -> String {
+    let Some(limit) = max_bytes else {
+        return text;
+    };
+    if text.len() <= limit {
+        return text;
+    }
+    let mut end = limit;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n\n…（内容已按 max_bytes={limit} 截断）", &text[..end])
 }

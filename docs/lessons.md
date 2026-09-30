@@ -78,6 +78,24 @@
 **对**：子模块条目的 id 同样带该前缀 —— 模块 `doc_probe::inner` 的前缀会匹配到子条目 `doc_probe::inner::Nested`，而 `Nested` 本身也是独立条目，于是被重复计入（条目数从 11 变 12）。必须再加「是成员类型」的约束（`ItemKind::is_member()`）。
 **相关**：`index.rs` 的增量复用分支
 
+### #1.11 增量复用成员要用 `path` 精确匹配，不能用 id 前缀
+
+**错**：#1.10 的修复加了 `is_member()` 约束，但仍按 `id` 前缀收成员。
+**对**：真实规模（tokio 依赖树）下仍出错 —— 模块 `tokio::runtime` 的前缀会把**后代模块的成员** `tokio::runtime::Handle::spawn` 也收进来，条目数从 5526 涨到 8259（并导致检索结果重复）。正确做法是用成员的 `path`（含 crate、不含自身）精确等于父条目 id 来判断，因为成员条目的 `path` 记录的就是"它挂在哪"。
+**相关**：`index.rs` 的增量复用分支
+
+### #1.12 成员文件名必须带成员类型
+
+**错**：成员文件命名为 `{父stem}.{成员名}.md`。
+**对**：同一类型下字段与方法可能同名 —— `syn::LitBool` 同时有字段 `value` 和方法 `value()`，两者都生成 `struct.LitBool.value.md` 而互相覆盖（真实规模下 5526 个条目只落盘 5519 个文件）。命名改为 `{父stem}.{成员类型}.{成员名}.md`。
+**相关**：`store.rs::member_output_path`
+
+### #1.13 签名里要清理 `ⓘ` 装饰字符
+
+**错**：直接把 `pre.rust.item-decl` 的文本当作签名。
+**对**：rustdoc 会在签名中插入可点击的提示图标（`ⓘ`，用于 portability / unstable 提示），文本形如 `JoinHandle<F::Output> ⓘwhere F: …`。需要过滤该字符，否则签名会混入噪声。
+**相关**：`parse.rs::clean_signature`
+
 ## 2. 文件系统与路径
 
 ### #2.1 文件名绝不能用 `::`

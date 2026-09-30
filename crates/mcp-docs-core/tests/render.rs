@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use mcp_docs_core::{
     encode_fs_name, item_output_path, member_output_path, parse_item_html, render_item,
-    resolve_href, DocItem, ParseOptions, RenderOptions, Resolved,
+    resolve_href, DocItem, ItemKind, ParseOptions, RenderOptions, Resolved,
 };
 
 /// fixture 根目录，等价于一个 `target/doc`。
@@ -126,8 +126,13 @@ fn member_file_has_no_duplicate_heading() {
 fn member_and_item_output_paths() {
     let out = PathBuf::from("out");
     assert_eq!(
-        member_output_path(&out, &PathBuf::from("doc_probe/struct.Demo.html"), "new"),
-        PathBuf::from("out/doc_probe/struct.Demo.new.md")
+        member_output_path(
+            &out,
+            &PathBuf::from("doc_probe/struct.Demo.html"),
+            ItemKind::Method,
+            "new"
+        ),
+        PathBuf::from("out/doc_probe/struct.Demo.method.new.md")
     );
     assert_eq!(
         item_output_path(&out, &PathBuf::from("doc_probe/inner/struct.Nested.html")),

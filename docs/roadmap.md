@@ -10,7 +10,7 @@
 | M3 | 索引 + 检索 | ✅ 已完成 |
 | M4 | 缓存 / 增量 / 指纹 | ✅ 已完成 |
 | M5 | MCP Server | ✅ 已完成 |
-| M6 | 打磨 | ⬜ 未开始 |
+| M6 | 打磨与真实规模验证 | ✅ 已完成 |
 
 状态标记：⬜ 未开始 / 🟡 进行中 / ✅ 已完成 / ⛔ 阻塞。
 
@@ -112,14 +112,22 @@
 ## M6 — 打磨
 
 **交付物**
-- 检索排序 / 分页 / 模糊匹配优化。
-- 可选增强：`all.html` 交叉校验兜底（当 `sidebar-items.js` 缺失时补全条目）。
-- 可选项：`--granularity`、`--max-doc-bytes`、`--include-auto-impls`。
-- 错误信息完善、README、发布配置（license、Cargo 元数据）。
+- 项目根 `README.md`（特性、快速开始、CLI / MCP 用法、文档索引）。
+- MCP `get_item` 支持 `max_bytes`（按字符边界截断，避免超大条目撑爆上下文）。
+- 清理签名里的 rustdoc 装饰字符（`ⓘ`）。
+- 真实规模验证：`serde` + `serde_json` + `tokio(full)` 依赖树（35 个 crate / 1034 顶层条目 / 5526 条目）。
+- 修复大规模暴露的两个缺陷：增量复用误收后代成员（lessons #1.11）、成员文件名同名冲突（lessons #1.12）。
 
-**验收标准**
-- 在真实大 crate（如 `serde` 或 `tokio`）上跑通全流程，导出与检索性能可接受。
-- 文档与代码一致。
+**验收标准**（均已达成）
+- 全量导出 5526 个 md 耗时 46 秒；二次增量 1.0 秒（复用 5523）。
+- 条目数 == 落盘文件数 == 5526（无覆盖）。
+- `search_items("spawn", crate="tokio")` 命中且无重复；`get_item(..., max_bytes)` 正确截断。
+- 真实规模下 MCP stdio 联调通过。
+
+**未做（记录为按需增强）**
+- `all.html` 交叉校验兜底（`sidebar-items.js` 已能完整覆盖，暂不需要）。
+- 检索分页 `offset`、`--granularity`、`--include-auto-impls`。
+- 发布形态元数据（crates.io 的 `repository` / `keywords` 等）。
 
 ## 工作约定
 

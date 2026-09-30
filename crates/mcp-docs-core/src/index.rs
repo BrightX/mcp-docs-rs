@@ -82,13 +82,13 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
                 item_count += 1;
                 reused += 1;
 
-                // 只复用「属于该条目的成员」：成员类型 + id 前缀。
-                // 仅靠前缀会误收子模块下的条目（如模块 `inner` 会收到 `inner::Nested`）。
-                let prefix = format!("{}::", entry.id.0);
-                for member in previous_items
-                    .iter()
-                    .filter(|summary| summary.kind.is_member() && summary.id.0.starts_with(&prefix))
-                {
+                // 只复用「直接属于该条目的成员」：成员的 path（含 crate）正好等于该条目 id。
+                // 不能用 id 前缀 —— 模块 `tokio::runtime` 的前缀会误收后代模块的成员
+                // （如 `tokio::runtime::Handle::spawn`），导致条目重复。
+                let parent_id = entry.id.0.as_str();
+                for member in previous_items.iter().filter(|summary| {
+                    summary.kind.is_member() && summary.path.join("::") == parent_id
+                }) {
                     items.push(member.clone());
                     item_count += 1;
                     reused += 1;
@@ -131,7 +131,8 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
             for member in &item.members {
                 if opts.write_markdown {
                     let markdown = render_member_item(member, &render_opts);
-                    let path = member_output_path(out_root, &entry.html_path, &member.name);
+                    let path =
+                        member_output_path(out_root, &entry.html_path, member.kind, &member.name);
                     atomic_write(&path, markdown.as_bytes())?;
                     written += 1;
                 }
@@ -145,7 +146,7 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
                     has_members: false,
                     file: rel_string(
                         out_root,
-                        &member_output_path(out_root, &entry.html_path, &member.name),
+                        &member_output_path(out_root, &entry.html_path, member.kind, &member.name),
                     ),
                     html_path: rel_string(doc_root, &entry.html_path),
                     src_mtime: mtime,
