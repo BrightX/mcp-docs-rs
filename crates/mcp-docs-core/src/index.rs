@@ -123,6 +123,7 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
                 has_docs: item.docs_md.is_some(),
                 has_members: !item.members.is_empty(),
                 file: rel_string(out_root, &item_output_path(out_root, &entry.html_path)),
+                html_path: rel_string(doc_root, &entry.html_path),
                 src_mtime: mtime,
             });
             item_count += 1;
@@ -146,6 +147,7 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
                         out_root,
                         &member_output_path(out_root, &entry.html_path, &member.name),
                     ),
+                    html_path: rel_string(doc_root, &entry.html_path),
                     src_mtime: mtime,
                 });
                 item_count += 1;

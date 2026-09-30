@@ -28,6 +28,8 @@
 | #1.16 | 增量、incremental | 复用未变化条目，只重建改动的部分 | `crates/mcp-docs-core/src/index.rs` → `BuildOptions::incremental` |
 | #1.17 | Meta、meta.json | 指纹 + 版本 + 生成时间，用于判断是否重建 | `crates/mcp-docs-core/src/cache.rs` → `Meta` / `is_stale` |
 | #1.18 | DocCache | 按需解析结果的内存缓存（给 MCP server 用） | `crates/mcp-docs-core/src/cache.rs` → `DocCache` |
+| #1.19 | MCP 工具、tool | 暴露给 Agent 的检索能力 | `crates/mcp-docs-server/src/server.rs`（`#[tool]`） |
+| #1.20 | MCP 资源、resource | 以 `rustdoc://` URI 暴露的文档节点 | `server.rs`（`read_resource` / `list_resource_templates`） |
 
 ## 2. rustdoc 产物（输入数据）
 
@@ -49,7 +51,7 @@
 |---|---|---|---|
 | #3.1 | core 库、核心库 | 纯库，零 async，解析与渲染全部在此 | `crates/mcp-docs-core/src/` |
 | #3.2 | CLI | 命令行导出 / 查询工具 | `crates/mcp-docs-cli/src/main.rs` |
-| #3.3 | server、MCP server | rmcp + tokio 的 MCP 服务 | `crates/mcp-docs-server/src/`（规划，M5） |
+| #3.3 | server、MCP server | rmcp + tokio 的 MCP 服务（stdio） | `crates/mcp-docs-server/src/`（`main.rs` + `server.rs`） |
 | #3.4 | 输出目录、doc-search | 落盘根，默认 `target/doc-search/` | `crates/mcp-docs-core/src/store.rs`；CLI 全局 `--out` |
 | #3.5 | fixture | 实测产物裁剪副本，用于测试 | `crates/mcp-docs-core/tests/fixtures/doc_probe/` |
 | #3.6 | 错题集 | 踩坑与错误记录 | `docs/lessons.md` |
@@ -60,3 +62,4 @@
 | #3.11 | 索引模块 | 构建 / 读写 `index.json` | `crates/mcp-docs-core/src/index.rs` |
 | #3.12 | 检索模块 | 检索与排序 | `crates/mcp-docs-core/src/search.rs` |
 | #3.13 | 缓存模块 | 指纹、meta、解析缓存 | `crates/mcp-docs-core/src/cache.rs` |
+| #3.14 | server 模块 | MCP 工具与资源实现 | `crates/mcp-docs-server/src/server.rs` |

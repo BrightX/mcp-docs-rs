@@ -117,3 +117,15 @@
 **对**：Git for Windows 自带 `/usr/bin/link.exe`（coreutils 的硬链接工具），且它在 `PATH` 里**排在 MSVC 的 `link.exe` 之前**（`which -a link` 可验证）。host 为 `x86_64-pc-windows-msvc` 时，若链接器按名字查找，会命中错误的 link，导致链接失败或行为异常。
 **规避**：把 cargo 命令放进 cmd 执行 —— `cmd //c "cargo build"`（Git-Bash 中 `/c` 需写成 `//c`）；或确保 MSVC 环境（vcvars）就位、链接器走完整路径。
 **相关**：本机 `which -a link` → `/usr/bin/link` 优先于 MSVC link
+
+### #5.3 rmcp 的 `#[tool_router]` 必须配 `#[tool_handler]`
+
+**错**：只写 `#[tool_router] impl DocsServer { ... }` 再手写 `impl ServerHandler { fn get_info }`，以为工具已经挂上。
+**对**：`#[tool_router]` 只生成 `Self::tool_router()` 关联函数；必须再加 `#[tool_handler]` 才会填充 `call_tool` / `list_tools`，否则工具调用走 trait 的空默认实现（外部表现为字段 `tool_router` "never read" 警告）。
+**相关**：`crates/mcp-docs-server/src/server.rs`
+
+### #5.4 `JsonSchema` derive 需要 `schemars` 名字在作用域
+
+**错**：只写 `use rmcp::schemars::JsonSchema;`，编译报 `cannot find module or crate schemars`。
+**对**：derive 展开后会引用 `schemars::...` 绝对路径，需把模块名也引入：`use rmcp::schemars::{self, JsonSchema};`（或直接在 Cargo.toml 加 `schemars` 依赖）。rmcp 已 re-export `schemars`，无需重复添加依赖。
+**相关**：`crates/mcp-docs-server/src/server.rs`

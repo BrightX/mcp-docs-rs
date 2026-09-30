@@ -9,7 +9,7 @@
 | M2 | Markdown 渲染 + 链接重写 + 降噪 | ✅ 已完成 |
 | M3 | 索引 + 检索 | ✅ 已完成 |
 | M4 | 缓存 / 增量 / 指纹 | ✅ 已完成 |
-| M5 | MCP Server | ⬜ 未开始 |
+| M5 | MCP Server | ✅ 已完成 |
 | M6 | 打磨 | ⬜ 未开始 |
 
 状态标记：⬜ 未开始 / 🟡 进行中 / ✅ 已完成 / ⛔ 阻塞。
@@ -96,14 +96,18 @@
 ## M5 — MCP Server
 
 **交付物**
-- `mcp-docs-server`：rmcp `#[tool_router]` 实现 6 个工具。
-- MCP 资源：`rustdoc://crates`、`rustdoc://{crate}`、`rustdoc://{crate}/{*item}`。
+- 新建 `crates/mcp-docs-server`（`main.rs` 启动 + `server.rs` 实现），依赖 `rmcp` 3.5 + `tokio`。
+- 6 个工具：`list_crates` / `list_items` / `search_items` / `get_item` / `get_item_source` / `rebuild_index`（`#[tool_router]` + `#[tool_handler]`）。
+- 资源：`rustdoc://crates`、`rustdoc://{crate}`，模板 `rustdoc://{crate}/{+item}`。
+- 启动时加载或重建索引；`get_item` 经 `DocCache` 按需解析（复用 M4 缓存）。
+- `ItemSummary` 增加 `html_path`，供按需解析定位源 HTML。
 - stdio 传输（`transport-io`）。
 
-**验收标准**
-- `search_items` → `get_item` 流程打通。
-- `read_resource("rustdoc://doc_probe/Demo")` 返回 markdown。
-- 用 MCP Inspector 或 rmcp client 联调通过。
+**验收标准**（均已达成）
+- `initialize` 协商成功，能力含 `tools` + `resources`。
+- `tools/list` 返回 6 个工具及其 JSON Schema。
+- `tools/call search_items {query:"new"}` 命中 `doc_probe::Demo::new`（得分 100）。
+- `resources/read rustdoc://doc_probe/Demo` 返回完整 markdown。
 
 ## M6 — 打磨
 
