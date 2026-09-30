@@ -4,17 +4,23 @@
 
 mod discover;
 mod error;
+mod link;
+mod markdown;
 mod model;
 mod parse;
 mod sidebar;
+mod store;
 
 pub use discover::{discover_all, discover_crate, list_crates};
 pub use error::{Error, Result};
+pub use link::{html_to_md_relpath, resolve_href, Resolved};
+pub use markdown::{render_item, render_member_item, LinkStyle, RenderOptions};
 pub use model::{DiscoveredItem, DocItem, ItemId, ItemKind, Section, SourceRef};
 pub use parse::{
     parse_item_html, parse_one_line, parse_rustdoc_meta, path_to_identity, ParseOptions,
 };
 pub use sidebar::{parse_sidebar_file, parse_sidebar_str};
+pub use store::{atomic_write, encode_fs_name, item_output_path, member_output_path};
 
 /// 去掉 `window.XXX = ` 前缀与结尾 `;`，返回中间的 JSON 文本。
 ///

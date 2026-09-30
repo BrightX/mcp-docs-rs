@@ -60,6 +60,18 @@
 **对**：方法 / 关联项的文档在**最近祖先 `details` 内**（`details.method-toggle > .docblock`）；字段 / 变体的文档才是**紧随其后**。实现分两条路径：先向上找 `details`，找不到再取下一个兄弟。
 **相关**：`parse.rs::find_member_doc`
 
+### #1.8 移除 `§` 锚点要走输出层，别做 HTML 片段匹配
+
+**错**：用 scraper 选中 `a.anchor` 后 `html.replace(&anchor.html(), "")` 删除；或试图用 htmd 的 `add_handler(vec!["a"], …)` 拦截。
+**对**：`anchor.html()` 的序列化结果与 `docblock.inner_html()` 中的对应片段**并不逐字一致**，字符串替换会静默失效；htmd 内置的 `a` 处理器是带 `append` 的有状态实现（`AnchorElementHandler`），函数式 handler 拦截也未生效。最终改为在 markdown 输出层删除固定形态的 `[§](#锚点)` 文本，简单可靠。
+**相关**：`parse.rs::strip_anchor_links`
+
+### #1.9 代码块语言标注用「占位符」法
+
+**错**：指望 htmd 自动为 rustdoc 代码块补语言标注（实际输出的是无语言围栏）。
+**对**：转换前用占位符抽出 `pre.rust` / `pre.rust-example-rendered`（按 class 判断语言），转换后再还原为 ```rust 围栏；代码内容取 `pre.text()`，避免高亮 `<span>` 干扰。
+**相关**：`parse.rs::docblock_to_md`
+
 ## 2. 文件系统与路径
 
 ### #2.1 文件名绝不能用 `::`

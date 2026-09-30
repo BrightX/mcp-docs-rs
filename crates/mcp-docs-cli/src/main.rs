@@ -27,6 +27,15 @@ enum Command {
         /// 条目 id，如 `doc_probe::Demo`。
         id: String,
     },
+    /// 导出所有条目为 markdown 文件树。
+    Export {
+        /// 输出目录。
+        #[arg(long, default_value = "target/doc-search")]
+        out: PathBuf,
+        /// 只导出指定 crate。
+        #[arg(long = "crate")]
+        crate_name: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -44,6 +53,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     match &cli.command {
         Command::Tree => print_tree(&cli.doc_dir),
         Command::Show { id } => show(&cli.doc_dir, id),
+        Command::Export { out, crate_name } => export(&cli.doc_dir, out, crate_name.as_deref()),
     }
 }
 
@@ -95,6 +105,54 @@ fn show(doc_dir: &Path, id: &str) -> anyhow::Result<()> {
                 println!("             {}", docs.lines().next().unwrap_or(""));
             }
         }
+    }
+    Ok(())
+}
+
+/// 导出所有条目为 markdown 文件树。
+fn export(doc_dir: &Path, out_dir: &Path, crate_filter: Option<&str>) -> anyhow::Result<()> {
+    let items = mcp_docs_core::discover_all(doc_dir)?;
+    let opts = mcp_docs_core::RenderOptions::default();
+    let parse_opts = mcp_docs_core::ParseOptions::default();
+    let (mut written, mut skipped) = (0usize, 0usize);
+
+    for discovered in &items {
+        if let Some(filter) = crate_filter {
+            if discovered.id.0.split("::").next() != Some(filter) {
+                continue;
+            }
+        }
+
+        let html_path = doc_dir.join(&discovered.html_path);
+        let html = match std::fs::read_to_string(&html_path) {
+            Ok(html) => html,
+            Err(err) => {
+                eprintln!("跳过 {}：{err}", html_path.display());
+                skipped += 1;
+                continue;
+            }
+        };
+        let item = mcp_docs_core::parse_item_html(&html, &discovered.html_path, &parse_opts)?;
+
+        // 条目文件本身。
+        let markdown = mcp_docs_core::render_item(&item, &opts);
+        let out_path = mcp_docs_core::item_output_path(out_dir, &discovered.html_path);
+        mcp_docs_core::atomic_write(&out_path, markdown.as_bytes())?;
+        written += 1;
+
+        // 每个成员单独成文件，便于精确检索。
+        for member in &item.members {
+            let markdown = mcp_docs_core::render_member_item(member, &opts);
+            let out_path =
+                mcp_docs_core::member_output_path(out_dir, &discovered.html_path, &member.name);
+            mcp_docs_core::atomic_write(&out_path, markdown.as_bytes())?;
+            written += 1;
+        }
+    }
+
+    println!("已导出 {written} 个 markdown 文件到 {}", out_dir.display());
+    if skipped > 0 {
+        println!("跳过 {skipped} 个（HTML 读取失败）");
     }
     Ok(())
 }

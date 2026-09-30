@@ -1,0 +1,114 @@
+//! 落盘：文件名编码、输出路径推导、原子写入。
+
+use std::fs;
+use std::io::Write;
+use std::path::{Component, Path, PathBuf};
+
+use crate::error::Result;
+
+/// 清洗文件名，保证跨平台（尤其 Windows）合法。
+///
+/// - 非法字符 `< > : " / \ | ? *` 与控制字符替换为 `_`；
+/// - Windows 保留名（`CON` / `PRN` / `AUX` / `NUL` / `COM1..9` / `LPT1..9`）加 `_` 前缀；
+/// - 去掉结尾的 `.` 与空格；
+/// - 过长（超过 200 字节）时截断并追加内容哈希。
+pub fn encode_fs_name(name: &str) -> String {
+    let mut out: String = name
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            c if (c as u32) < 0x20 => '_',
+            c => c,
+        })
+        .collect();
+
+    out = out.trim_end_matches(['.', ' ']).to_string();
+    if out.is_empty() {
+        return "_".to_string();
+    }
+
+    if is_reserved(&out) {
+        out.insert(0, '_');
+    }
+
+    if out.len() > 200 {
+        let hash = fnv1a(&out);
+        let mut truncated: String = out.chars().take(180).collect();
+        truncated.push_str(&format!("-{hash:08x}"));
+        out = truncated;
+    }
+
+    out
+}
+
+/// 条目 markdown 的输出路径：镜像 HTML 目录结构，扩展名换成 `.md`。
+pub fn item_output_path(out_root: &Path, html_rel: &Path) -> PathBuf {
+    out_root.join(sanitize_rel(&html_rel.with_extension("md")))
+}
+
+/// 成员 markdown 的输出路径：父文件名 + `.` + 成员名 + `.md`。
+///
+/// 例如父文件 `doc_probe/struct.Demo.html` 的成员 `new`
+/// → `<out_root>/doc_probe/struct.Demo.new.md`。
+pub fn member_output_path(out_root: &Path, parent_html_rel: &Path, member_name: &str) -> PathBuf {
+    let dir = parent_html_rel.parent().unwrap_or_else(|| Path::new(""));
+    let stem = parent_html_rel
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let file = format!("{stem}.{}.md", encode_fs_name(member_name));
+    out_root.join(sanitize_rel(dir)).join(file)
+}
+
+/// 原子写入：先写临时文件再 rename，避免读到写了一半的文件。
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("tmp");
+    {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// 对相对路径的每一段做文件名清洗。
+fn sanitize_rel(rel: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in rel.components() {
+        if let Component::Normal(name) = component {
+            out.push(encode_fs_name(&name.to_string_lossy()));
+        } else {
+            out.push(component.as_os_str());
+        }
+    }
+    out
+}
+
+/// 是否为 Windows 保留名。
+fn is_reserved(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    let stem = upper.split('.').next().unwrap_or("");
+    matches!(stem, "CON" | "PRN" | "AUX" | "NUL")
+        || numbered_reserved(stem, "COM")
+        || numbered_reserved(stem, "LPT")
+}
+
+/// `COM1..COM9` / `LPT1..LPT9` 形式的保留名。
+fn numbered_reserved(stem: &str, prefix: &str) -> bool {
+    stem.strip_prefix(prefix)
+        .is_some_and(|rest| matches!(rest, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"))
+}
+
+/// FNV-1a 32 位哈希，用于超长名截断后的去重后缀。
+fn fnv1a(text: &str) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in text.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}

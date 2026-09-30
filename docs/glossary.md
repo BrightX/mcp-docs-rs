@@ -44,7 +44,10 @@
 | #3.1 | core 库、核心库 | 纯库，零 async，解析与渲染全部在此 | `crates/mcp-docs-core/src/` |
 | #3.2 | CLI | 命令行导出 / 查询工具 | `crates/mcp-docs-cli/src/main.rs` |
 | #3.3 | server、MCP server | rmcp + tokio 的 MCP 服务 | `crates/mcp-docs-server/src/`（规划，M5） |
-| #3.4 | 输出目录、doc-search | 落盘根，默认 `target/doc-search/` | `store.rs`（规划，M2） |
+| #3.4 | 输出目录、doc-search | 落盘根，默认 `target/doc-search/` | `crates/mcp-docs-core/src/store.rs`；CLI `export --out` |
 | #3.5 | fixture | 实测产物裁剪副本，用于测试 | `crates/mcp-docs-core/tests/fixtures/doc_probe/` |
 | #3.6 | 错题集 | 踩坑与错误记录 | `docs/lessons.md` |
 | #3.7 | 开发规范 | 代码质量 / 风格 / 注释 / 提交规范 | `docs/conventions.md` |
+| #3.8 | 渲染、render | 把条目转成 markdown | `crates/mcp-docs-core/src/markdown.rs` |
+| #3.9 | 链接重写、LinkStyle | 链接输出风格（相对路径 / 纯文本 / 原样） | `crates/mcp-docs-core/src/markdown.rs`；归类 `link.rs` |
+| #3.10 | 导出、export | 批量落盘 markdown 文件树 | CLI `mcp-docs export`；`store.rs` |

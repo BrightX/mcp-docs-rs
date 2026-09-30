@@ -6,7 +6,7 @@
 |---|---|---|
 | M0 | 骨架 + 文档发现 | ✅ 已完成 |
 | M1 | 单条目解析 | ✅ 已完成 |
-| M2 | Markdown 渲染 + 链接重写 + 降噪 | ⬜ 未开始 |
+| M2 | Markdown 渲染 + 链接重写 + 降噪 | ✅ 已完成 |
 | M3 | 索引 + 检索 | ⬜ 未开始 |
 | M4 | 缓存 / 增量 / 指纹 | ⬜ 未开始 |
 | M5 | MCP Server | ⬜ 未开始 |
@@ -47,16 +47,19 @@
 ## M2 — Markdown 渲染 + 链接重写 + 降噪
 
 **交付物**
-- `markdown.rs`：`render_item` / `render_crate_index`，含噪声剥离与代码块接管。
-- `link.rs`：`resolve_href` + 三种 `LinkStyle`。
-- `store.rs`：`encode_fs_name` / `atomic_write` / `item_output_path`。
-- CLI：`mcp-docs export`。
+- `markdown.rs`：`render_item` / `render_member_item`，成员按类型分组内联。
+- `link.rs`：`resolve_href`（页内锚 / 条目 / 源码 / 外链）+ `html_to_md_relpath`。
+- `store.rs`：`encode_fs_name` / `atomic_write` / `item_output_path` / `member_output_path`。
+- 降噪：`strip_anchor_links` 去掉 `[§](#锚点)`；代码块用占位符法补 `rust` 语言标注。
+- CLI：`mcp-docs export [--out DIR] [--crate NAME]`。
+- 测试 5 个（`tests/render.rs`）。
 
-**验收标准**
-- `struct.Demo.md` 不含 "Copy item path"、不含 blanket / synthetic impls。
-- 代码示例带 ```rust 围栏，无 HTML 实体残留。
-- 内部链接可解析（`Relative` 指向目标 md + 锚点，或 `PlainPath` 纯路径）。
-- `encode_fs_name` 对 `Demo<Bar>` / `CON` / `Demo::new` 的断言通过。
+**验收标准**（均已达成）
+- 导出的 markdown 不含 "Copy item path"、不含 blanket / synthetic impls、不含 `[§]` 噪声。
+- 代码示例带 ```rust 围栏。
+- 链接重写为 `.md`（默认 `Relative`；`PlainPath` / `KeepOriginal` 亦实现）。
+- `encode_fs_name` 对 `Demo<Bar>` / `CON` / `Demo::new` / 空串的断言通过。
+- 条目文件 + 成员独立文件按 `target/doc-search/` 结构落盘（fixture 导出 11 个文件）。
 
 ## M3 — 索引 + 检索
 

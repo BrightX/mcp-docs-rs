@@ -317,11 +317,71 @@ fn find_member_doc(anchor: &ElementRef) -> Option<String> {
 }
 
 /// 把 docblock 内部 HTML 转成 markdown。
+///
+/// 处理两处 rustdoc 特有噪声（见 `docs/lessons.md`）：
+/// - `<a class="anchor">§</a>`：转换后表现为 `[§](#锚点)`，由 `strip_anchor_links` 删除；
+/// - 代码块语言标注：htmd 默认不带语言，这里按 `<pre>` 的 class 补 `rust`。
 fn docblock_to_md(docblock: &ElementRef) -> String {
-    htmd::convert(&docblock.inner_html())
-        .unwrap_or_default()
-        .trim()
-        .to_string()
+    let mut html = docblock.inner_html();
+
+    // 1) 用占位符抽出代码块，避免 htmd 丢掉语言信息。
+    let mut code_blocks = Vec::new();
+    for pre in docblock.select(&selector("pre.rust, pre.rust-example-rendered")) {
+        let raw = pre.html();
+        if !html.contains(&raw) {
+            continue;
+        }
+        let placeholder = format!("MCPDOCSCODEBLOCK{}END", code_blocks.len());
+        html = html.replace(&raw, &placeholder);
+        code_blocks.push((code_language(&pre), pre.text().collect::<String>()));
+    }
+
+    // 2) 转换，并去掉 rustdoc 注入的 § 锚点链接。
+    let converted = htmd::convert(&html).unwrap_or_default();
+    let mut markdown = strip_anchor_links(&converted);
+
+    // 3) 还原为带语言标注的围栏代码块。
+    for (index, (language, code)) in code_blocks.into_iter().enumerate() {
+        let placeholder = format!("MCPDOCSCODEBLOCK{index}END");
+        let fenced = format!("```{language}\n{}\n```", code.trim_end());
+        markdown = markdown.replace(&placeholder, &fenced);
+    }
+
+    markdown.trim().to_string()
+}
+
+/// 由 `<pre>` 的 class 推断代码块语言，默认 `rust`。
+fn code_language(pre: &ElementRef) -> String {
+    let class = pre.value().attr("class").unwrap_or_default();
+    for part in class.split_whitespace() {
+        if let Some(language) = part.strip_prefix("language-") {
+            return language.to_string();
+        }
+    }
+    "rust".to_string()
+}
+
+/// 去掉 rustdoc 注入的 `[§](#锚点)` 链接文本。
+///
+/// rustdoc 在每个标题末尾插入 `<a class="anchor">§</a>`，转成 markdown 后
+/// 表现为 `[§](#锚点)`。这里在输出层面整段删除。
+fn strip_anchor_links(markdown: &str) -> String {
+    const MARKER: &str = "[§](#";
+    let mut out = String::with_capacity(markdown.len());
+    let mut rest = markdown;
+
+    while let Some(start) = rest.find(MARKER) {
+        out.push_str(&rest[..start]);
+        match rest[start..].find(')') {
+            Some(close) => rest = &rest[start + close + 1..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// 由成员锚点 id 判断成员类型。
