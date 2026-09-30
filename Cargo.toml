@@ -3,6 +3,7 @@ members = [
     "crates/mcp-docs-core",
     "crates/mcp-docs-cli",
 ]
+exclude = ["temp"]
 resolver = "2"
 
 [workspace.package]
