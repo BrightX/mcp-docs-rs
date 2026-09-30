@@ -111,7 +111,10 @@ fn member_file_has_no_duplicate_heading() {
         .find(|m| m.name == "new")
         .expect("应识别出 Demo::new");
     let markdown = mcp_docs_core::render_member_item(member, &RenderOptions::default());
-    assert!(markdown.starts_with("# `doc_probe::Demo::new`"), "{markdown}");
+    assert!(
+        markdown.starts_with("# `doc_probe::Demo::new`"),
+        "{markdown}"
+    );
     assert!(
         !markdown.contains("### `new`"),
         "独立成员文件不应再有子标题：\n{markdown}"

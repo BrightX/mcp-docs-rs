@@ -213,3 +213,55 @@ pub struct DocItem {
     /// 生成该页面的 rustdoc 版本。
     pub rustdoc_version: Option<String>,
 }
+
+/// 索引里的轻量条目摘要（不含正文），供检索与导航使用。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemSummary {
+    /// 条目唯一标识。
+    pub id: ItemId,
+    /// 条目类型。
+    pub kind: ItemKind,
+    /// 条目名（不含路径）。
+    pub name: String,
+    /// 完整路径（含 crate，不含自身）。
+    pub path: Vec<String>,
+    /// 一行摘要（页面 meta，成员取文档首行）。
+    pub one_line: String,
+    /// 是否有文档。
+    pub has_docs: bool,
+    /// 是否有成员。
+    pub has_members: bool,
+    /// 相对输出根目录的 markdown 路径，统一以 `/` 分隔。
+    pub file: String,
+}
+
+/// crate 摘要。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrateSummary {
+    /// crate 名。
+    pub name: String,
+    /// crate 版本（暂未采集）。
+    pub version: Option<String>,
+    /// 条目数（含成员）。
+    pub item_count: usize,
+}
+
+/// 全量索引。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Index {
+    /// 索引结构版本。
+    pub schema_version: u32,
+    /// 生成索引时的 rustdoc 版本。
+    pub rustdoc_version: Option<String>,
+    /// 生成时间（Unix 秒）。
+    pub generated_at: u64,
+    /// 产物根目录。
+    pub target_doc: String,
+    /// crate 列表。
+    pub crates: Vec<CrateSummary>,
+    /// 全部条目（扁平）。
+    pub items: Vec<ItemSummary>,
+}
+
+/// 当前索引结构版本。
+pub const INDEX_SCHEMA_VERSION: u32 = 1;

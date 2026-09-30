@@ -7,7 +7,7 @@
 | M0 | 骨架 + 文档发现 | ✅ 已完成 |
 | M1 | 单条目解析 | ✅ 已完成 |
 | M2 | Markdown 渲染 + 链接重写 + 降噪 | ✅ 已完成 |
-| M3 | 索引 + 检索 | ⬜ 未开始 |
+| M3 | 索引 + 检索 | ✅ 已完成 |
 | M4 | 缓存 / 增量 / 指纹 | ⬜ 未开始 |
 | M5 | MCP Server | ⬜ 未开始 |
 | M6 | 打磨 | ⬜ 未开始 |
@@ -64,15 +64,18 @@
 ## M3 — 索引 + 检索
 
 **交付物**
+- `model.rs` 扩展：`ItemSummary` / `CrateSummary` / `Index`。
 - `index.rs`：`build_index` / `write_index` / `load_index`，生成扁平 `index.json`。
-- `search.rs`：`search` + `rank`（子串 / 前缀 / 模糊，按 crate、kind 过滤）。
-- 成员条目化落盘（独立文件 + 内联父文件）。
-- CLI：`mcp-docs search <query>`。
+- `search.rs`：`search` + `rank`（子串 / 前缀 / 模糊；按 crate、kind 过滤；得分排序）。
+- `export` 顺带产出 `index.json`；`--out` 提升为全局参数。
+- CLI：`mcp-docs search <query> [--limit] [--mode] [--crate] [--kind]`。
+- 测试 7 个（`tests/search.rs`）。
 
-**验收标准**
-- 搜 `new` 命中 `doc_probe::Demo::new`。
-- 搜 `demo` 命中 `Demo`（描述匹配）。
-- `index.json` 可被 `serde_json` 解析，条目数与发现阶段一致。
+**验收标准**（均已达成）
+- 搜 `new` 命中 `doc_probe::Demo::new`（得分 100）。
+- 搜 `demo struct` 命中 `Demo`（描述匹配，得分 20）。
+- `index.json` 可被 `serde_json` 反序列化，条目数（11）与发现阶段一致。
+- 成员条目进入索引，`file` 指向独立 markdown 文件。
 
 ## M4 — 缓存 / 增量 / 指纹
 

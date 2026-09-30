@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// 检索本地 rustdoc 文档的命令行工具。
 #[derive(Debug, Parser)]
@@ -13,6 +13,10 @@ struct Cli {
     /// rustdoc 产物目录（`cargo doc` 的输出目录）。
     #[arg(long, global = true, default_value = "target/doc")]
     doc_dir: PathBuf,
+
+    /// 输出目录（markdown 与 index.json 的落盘根）。
+    #[arg(long, global = true, default_value = "target/doc-search")]
+    out: PathBuf,
 
     #[command(subcommand)]
     command: Command,
@@ -27,15 +31,41 @@ enum Command {
         /// 条目 id，如 `doc_probe::Demo`。
         id: String,
     },
-    /// 导出所有条目为 markdown 文件树。
+    /// 导出所有条目为 markdown 文件树，并生成 index.json。
     Export {
-        /// 输出目录。
-        #[arg(long, default_value = "target/doc-search")]
-        out: PathBuf,
         /// 只导出指定 crate。
         #[arg(long = "crate")]
         crate_name: Option<String>,
     },
+    /// 检索条目。
+    Search {
+        /// 查询词。
+        query: String,
+        /// 返回上限。
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// 匹配模式。
+        #[arg(long, value_enum, default_value_t = ModeArg::Substring)]
+        mode: ModeArg,
+        /// 限定 crate。
+        #[arg(long = "crate")]
+        crate_name: Option<String>,
+        /// 限定条目类型（如 struct / fn / trait）。
+        #[arg(long)]
+        kind: Option<String>,
+    },
+}
+
+/// 命令行侧的匹配模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+enum ModeArg {
+    /// 子串匹配。
+    #[default]
+    Substring,
+    /// 前缀匹配。
+    Prefix,
+    /// 模糊子序列匹配。
+    Fuzzy,
 }
 
 fn main() -> ExitCode {
@@ -53,7 +83,22 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     match &cli.command {
         Command::Tree => print_tree(&cli.doc_dir),
         Command::Show { id } => show(&cli.doc_dir, id),
-        Command::Export { out, crate_name } => export(&cli.doc_dir, out, crate_name.as_deref()),
+        Command::Export { crate_name } => export(&cli.doc_dir, &cli.out, crate_name.as_deref()),
+        Command::Search {
+            query,
+            limit,
+            mode,
+            crate_name,
+            kind,
+        } => run_search(
+            &cli.doc_dir,
+            &cli.out,
+            query,
+            *limit,
+            *mode,
+            crate_name.as_deref(),
+            kind.as_deref(),
+        ),
     }
 }
 
@@ -109,10 +154,10 @@ fn show(doc_dir: &Path, id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 导出所有条目为 markdown 文件树。
+/// 导出 markdown 文件树，并生成 `index.json`。
 fn export(doc_dir: &Path, out_dir: &Path, crate_filter: Option<&str>) -> anyhow::Result<()> {
     let items = mcp_docs_core::discover_all(doc_dir)?;
-    let opts = mcp_docs_core::RenderOptions::default();
+    let render_opts = mcp_docs_core::RenderOptions::default();
     let parse_opts = mcp_docs_core::ParseOptions::default();
     let (mut written, mut skipped) = (0usize, 0usize);
 
@@ -134,15 +179,13 @@ fn export(doc_dir: &Path, out_dir: &Path, crate_filter: Option<&str>) -> anyhow:
         };
         let item = mcp_docs_core::parse_item_html(&html, &discovered.html_path, &parse_opts)?;
 
-        // 条目文件本身。
-        let markdown = mcp_docs_core::render_item(&item, &opts);
+        let markdown = mcp_docs_core::render_item(&item, &render_opts);
         let out_path = mcp_docs_core::item_output_path(out_dir, &discovered.html_path);
         mcp_docs_core::atomic_write(&out_path, markdown.as_bytes())?;
         written += 1;
 
-        // 每个成员单独成文件，便于精确检索。
         for member in &item.members {
-            let markdown = mcp_docs_core::render_member_item(member, &opts);
+            let markdown = mcp_docs_core::render_member_item(member, &render_opts);
             let out_path =
                 mcp_docs_core::member_output_path(out_dir, &discovered.html_path, &member.name);
             mcp_docs_core::atomic_write(&out_path, markdown.as_bytes())?;
@@ -150,9 +193,67 @@ fn export(doc_dir: &Path, out_dir: &Path, crate_filter: Option<&str>) -> anyhow:
         }
     }
 
-    println!("已导出 {written} 个 markdown 文件到 {}", out_dir.display());
+    // 生成索引，供 search 与 MCP server 使用。
+    let index = mcp_docs_core::build_index(doc_dir, out_dir)?;
+    let index_path = out_dir.join("index.json");
+    mcp_docs_core::write_index(&index, &index_path)?;
+
+    println!(
+        "已导出 {written} 个 markdown 文件，索引 {} 个条目 → {}",
+        index.items.len(),
+        index_path.display()
+    );
     if skipped > 0 {
         println!("跳过 {skipped} 个（HTML 读取失败）");
+    }
+    Ok(())
+}
+
+/// 检索索引（缺索引时先构建）。
+#[allow(clippy::too_many_arguments)]
+fn run_search(
+    doc_dir: &Path,
+    out_dir: &Path,
+    query: &str,
+    limit: usize,
+    mode: ModeArg,
+    crate_name: Option<&str>,
+    kind: Option<&str>,
+) -> anyhow::Result<()> {
+    let index_path = out_dir.join("index.json");
+    let index = match mcp_docs_core::load_index(&index_path) {
+        Ok(index) => index,
+        Err(_) => {
+            let index = mcp_docs_core::build_index(doc_dir, out_dir)?;
+            mcp_docs_core::write_index(&index, &index_path)?;
+            index
+        }
+    };
+
+    let mut search = mcp_docs_core::SearchQuery::new(query);
+    search.limit = limit;
+    search.mode = match mode {
+        ModeArg::Substring => mcp_docs_core::MatchMode::Substring,
+        ModeArg::Prefix => mcp_docs_core::MatchMode::Prefix,
+        ModeArg::Fuzzy => mcp_docs_core::MatchMode::Fuzzy,
+    };
+    search.crate_name = crate_name.map(str::to_string);
+    if let Some(kind) = kind {
+        let kind = mcp_docs_core::ItemKind::from_file_prefix(kind)
+            .ok_or_else(|| anyhow::anyhow!("未知的条目类型 `{kind}`"))?;
+        search.kinds.push(kind);
+    }
+
+    let hits = mcp_docs_core::search(&index, &search);
+    println!("找到 {} 个条目：", hits.len());
+    for hit in &hits {
+        println!(
+            "{:<5} {:<12} {:<34} {}",
+            hit.score,
+            hit.item.kind.file_prefix(),
+            hit.item.id,
+            hit.item.one_line
+        );
     }
     Ok(())
 }

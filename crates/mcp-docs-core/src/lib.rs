@@ -4,21 +4,28 @@
 
 mod discover;
 mod error;
+mod index;
 mod link;
 mod markdown;
 mod model;
 mod parse;
+mod search;
 mod sidebar;
 mod store;
 
 pub use discover::{discover_all, discover_crate, list_crates};
 pub use error::{Error, Result};
+pub use index::{build_index, load_index, write_index};
 pub use link::{html_to_md_relpath, resolve_href, Resolved};
 pub use markdown::{render_item, render_member_item, LinkStyle, RenderOptions};
-pub use model::{DiscoveredItem, DocItem, ItemId, ItemKind, Section, SourceRef};
+pub use model::{
+    CrateSummary, DiscoveredItem, DocItem, Index, ItemId, ItemKind, ItemSummary, Section,
+    SourceRef, INDEX_SCHEMA_VERSION,
+};
 pub use parse::{
     parse_item_html, parse_one_line, parse_rustdoc_meta, path_to_identity, ParseOptions,
 };
+pub use search::{search, MatchMode, SearchHit, SearchQuery};
 pub use sidebar::{parse_sidebar_file, parse_sidebar_str};
 pub use store::{atomic_write, encode_fs_name, item_output_path, member_output_path};
 
