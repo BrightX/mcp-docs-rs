@@ -4,7 +4,7 @@
 
 | 阶段 | 目标 | 状态 |
 |---|---|---|
-| M0 | 骨架 + 文档发现 | ⬜ 未开始 |
+| M0 | 骨架 + 文档发现 | ✅ 已完成 |
 | M1 | 单条目解析 | ⬜ 未开始 |
 | M2 | Markdown 渲染 + 链接重写 + 降噪 | ⬜ 未开始 |
 | M3 | 索引 + 检索 | ⬜ 未开始 |
@@ -17,15 +17,16 @@
 ## M0 — 骨架 + 文档发现
 
 **交付物**
-- 3-crate workspace（`mcp-docs-core` / `mcp-docs-cli` / `mcp-docs-server`）骨架，根 `Cargo.toml` 统一依赖版本。
+- workspace 骨架：`mcp-docs-core`（纯库）+ `mcp-docs-cli`，根 `Cargo.toml` 统一依赖版本。`mcp-docs-server` 推迟到 M5 建立（避免无用的占位 main）。
 - `sidebar.rs`：`parse_sidebar_str` / `parse_sidebar_file`。
-- `discover.rs`：`list_crates` + `discover_crate`（递归 sidebar，`all.html` 兜底）。
+- `discover.rs`：`list_crates` + `discover_crate` + `discover_all`（递归 sidebar）。`all.html` 兜底与交叉校验推迟到 M1（届时引入 DOM 解析一并实现）。
 - CLI：`mcp-docs tree`。
-- 测试 fixture：从 `temp/doc_probe/target/doc` 裁剪拷贝到 `tests/fixtures/doc_probe/`。
+- 测试 fixture：从 `temp/doc_probe/target/doc` 裁剪拷贝到 `tests/fixtures/doc_probe/`（约 99 KB）。
+- 集成测试 5 个，全部通过。
 
 **验收标准**
-- `mcp-docs tree` 对 fixture 打印出 6 个顶层条目 + `inner::Nested`，与 `all.html` 内容一致。
-- `parse_sidebar_str` 单元测试通过。
+- `mcp-docs tree` 对 fixture 打印出 6 个条目：`inner` / `Demo` / `Kind` / `DoIt` / `free_fn` / `inner::Nested`。
+- `parse_sidebar_str` 单元测试通过（含单数 / 复数 key 兼容、未知 key 忽略、缺失赋值报错）。
 
 ## M1 — 单条目解析
 

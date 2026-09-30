@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Kind"],"fn":["free_fn"],"mod":["inner"],"struct":["Demo"],"trait":["DoIt"]};

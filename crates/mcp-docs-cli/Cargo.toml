@@ -1,0 +1,15 @@
+[package]
+name = "mcp-docs-cli"
+description = "mcp-docs 命令行工具"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mcp-docs"
+path = "src/main.rs"
+
+[dependencies]
+mcp-docs-core = { path = "../mcp-docs-core" }
+clap = { workspace = true }
+anyhow = { workspace = true }
