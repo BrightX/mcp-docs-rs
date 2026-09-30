@@ -160,3 +160,56 @@ pub struct DiscoveredItem {
     /// 相对 `doc_root` 的 HTML 路径，如 `doc_probe/inner/struct.Nested.html`。
     pub html_path: PathBuf,
 }
+
+/// 源码位置引用。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceRef {
+    /// 源码文件路径，如 `../src/doc_probe/lib.rs.html`。
+    pub file: String,
+    /// 起始行号（1 起）。
+    pub line_start: Option<u32>,
+    /// 结束行号（1 起，含）。
+    pub line_end: Option<u32>,
+}
+
+/// 条目页面上的一个分节（由 `h2.section-header` 切分）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Section {
+    /// 分节锚点 id，如 `fields` / `implementations`。
+    pub id: String,
+    /// 分节标题，如 `Fields`。
+    pub title: String,
+    /// 分节内的散文内容（markdown）。M1 暂空，M2 补齐。
+    pub body_md: String,
+    /// 归属该分节的成员条目。
+    pub members: Vec<DocItem>,
+}
+
+/// 一个已解析的文档条目。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocItem {
+    /// 条目唯一标识。
+    pub id: ItemId,
+    /// 条目类型。
+    pub kind: ItemKind,
+    /// 条目名（不含路径）。
+    pub name: String,
+    /// 完整路径（含 crate，不含自身）。
+    pub path: Vec<String>,
+    /// 所属 crate。
+    pub crate_name: String,
+    /// 声明签名（`pre.rust.item-decl` 的纯文本）。
+    pub signature: Option<String>,
+    /// 主文档（`details.top-doc` 内的 docblock，markdown）。
+    pub docs_md: Option<String>,
+    /// 源码位置。
+    pub source: Option<SourceRef>,
+    /// 页面上的分节。
+    pub sections: Vec<Section>,
+    /// 全部成员条目（扁平汇总）。
+    pub members: Vec<DocItem>,
+    /// 相对 `doc_root` 的源 HTML 路径。
+    pub html_path: PathBuf,
+    /// 生成该页面的 rustdoc 版本。
+    pub rustdoc_version: Option<String>,
+}

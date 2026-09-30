@@ -10,15 +10,18 @@
 
 | 编号 | 术语 / 别名 | 含义 | 代码位置 |
 |---|---|---|---|
-| #1.1 | 条目、文档条目 | 一个可落盘的文档单元（struct / trait / fn / 方法…） | `crates/mcp-docs-core/src/model.rs` → `DocItem`（规划，M1） |
-| #1.2 | 成员、成员条目 | 挂在父条目下的子条目：方法 / 字段 / 变体 / 关联项 | `model.rs` → `DocItem::members`（规划，M1） |
+| #1.1 | 条目、文档条目 | 一个可落盘的文档单元（struct / trait / fn / 方法…） | `crates/mcp-docs-core/src/model.rs` → `DocItem`；解析 `parse.rs::parse_item_html` |
+| #1.2 | 成员、成员条目 | 挂在父条目下的子条目：方法 / 字段 / 变体 / 关联项 | `model.rs` → `DocItem::members`；收集 `parse.rs::collect_members` |
 | #1.3 | id、ItemId | 条目的稳定唯一标识，形如 `doc_probe::Demo::new` | `crates/mcp-docs-core/src/model.rs` → `ItemId` |
-| #1.4 | 一行摘要 | 索引里条目的简介，取自 `<meta name=description>` | `model.rs` → `ItemSummary::one_line`（规划，M3） |
+| #1.4 | 一行摘要、one_line | 条目简介，取自 `<meta name=description>` | `parse.rs::parse_one_line`（M3 起供索引使用） |
 | #1.5 | 发现、discover | 从产物目录构建条目清单的过程 | `crates/mcp-docs-core/src/discover.rs` |
 | #1.6 | 索引、index.json | 全量条目的扁平清单，Agent 首读 | `crates/mcp-docs-core/src/index.rs`（规划，M3） |
 | #1.7 | 指纹、fingerprint | 判断产物是否变化、是否需要重建 | `crates/mcp-docs-core/src/cache.rs` → `Fingerprint`（规划，M4） |
 | #1.8 | 先搜后读 | 设计原则：搜索只返回轻摘要 + 指针，正文按需读取 | `design.md` §8 |
 | #1.9 | DiscoveredItem | 发现阶段产出的条目（尚未解析正文） | `crates/mcp-docs-core/src/model.rs` → `DiscoveredItem` |
+| #1.10 | 分节、Section | 页面按 `h2.section-header` 切分的区块 | `model.rs` → `Section`；切分 `parse.rs::collect_sections` |
+| #1.11 | ParseOptions | 解析开关（含 `include_auto_impls` 是否保留噪声 impl） | `parse.rs` → `ParseOptions` |
+| #1.12 | 源码位置、SourceRef | 条目对应的源码文件与行号 | `model.rs` → `SourceRef`；解析 `parse.rs::parse_source_href` |
 
 ## 2. rustdoc 产物（输入数据）
 
@@ -26,12 +29,13 @@
 |---|---|---|---|
 | #2.1 | `sidebar-items.js` | 每个模块目录一份的纯 JSON 条目清单，建索引入口 | `crates/mcp-docs-core/src/sidebar.rs` |
 | #2.2 | `crates.js` | crate 列表（`window.ALL_CRATES`） | `crates/mcp-docs-core/src/discover.rs::list_crates` |
-| #2.3 | `all.html` | 全部条目的扁平清单页，发现兜底与交叉校验 | `discover.rs`（规划，M1） |
-| #2.4 | 签名、item-decl | `<pre class="rust item-decl">` 里的条目声明 | `parse.rs::signature`（规划，M1） |
-| #2.5 | docblock | 文档正文区块；主文档在 `details.toggle.top-doc` 内 | `parse.rs`（规划，M1） |
-| #2.6 | 噪声区块 | `#synthetic-implementations` / `#blanket-implementations`，默认剥离 | `parse.rs::ParseOptions`（规划，M1） |
+| #2.3 | `all.html` | 全部条目的扁平清单页，发现兜底与交叉校验 | `discover.rs`（规划，M6 按需增强） |
+| #2.4 | 签名、item-decl | `<pre class="rust item-decl">` 里的条目声明 | `parse.rs` → `DocItem::signature` |
+| #2.5 | docblock | 文档正文区块；主文档在 `details.toggle.top-doc` 内 | `parse.rs::docblock_to_md` |
+| #2.6 | 噪声区块 | `#synthetic-implementations` / `#blanket-implementations`，默认剥离 | `parse.rs::ParseOptions` / `is_noise_section` |
 | #2.7 | `search.index` | rustdoc 定制二进制压缩索引，**明确不使用** | 见 `lessons.md` #1.1 |
 | #2.8 | 实测事实底座 | design.md 中经真实产物核对的结构事实 | `design.md` §1 |
+| #2.9 | `rustdoc-vars` | 页面头部 meta，含 `data-current-crate` / `data-rustdoc-version` | `parse.rs::parse_rustdoc_meta` |
 
 ## 3. 代码位置对照
 

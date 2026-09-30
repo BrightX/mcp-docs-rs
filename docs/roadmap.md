@@ -5,7 +5,7 @@
 | 阶段 | 目标 | 状态 |
 |---|---|---|
 | M0 | 骨架 + 文档发现 | ✅ 已完成 |
-| M1 | 单条目解析 | ⬜ 未开始 |
+| M1 | 单条目解析 | ✅ 已完成 |
 | M2 | Markdown 渲染 + 链接重写 + 降噪 | ⬜ 未开始 |
 | M3 | 索引 + 检索 | ⬜ 未开始 |
 | M4 | 缓存 / 增量 / 指纹 | ⬜ 未开始 |
@@ -19,7 +19,7 @@
 **交付物**
 - workspace 骨架：`mcp-docs-core`（纯库）+ `mcp-docs-cli`，根 `Cargo.toml` 统一依赖版本。`mcp-docs-server` 推迟到 M5 建立（避免无用的占位 main）。
 - `sidebar.rs`：`parse_sidebar_str` / `parse_sidebar_file`。
-- `discover.rs`：`list_crates` + `discover_crate` + `discover_all`（递归 sidebar）。`all.html` 兜底与交叉校验推迟到 M1（届时引入 DOM 解析一并实现）。
+- `discover.rs`：`list_crates` + `discover_crate` + `discover_all`（递归 sidebar）。`all.html` 兜底与交叉校验经评估价值有限（sidebar 已能完整覆盖），改为 M6 的按需增强。
 - CLI：`mcp-docs tree`。
 - 测试 fixture：从 `temp/doc_probe/target/doc` 裁剪拷贝到 `tests/fixtures/doc_probe/`（约 99 KB）。
 - 集成测试 5 个，全部通过。
@@ -31,15 +31,18 @@
 ## M1 — 单条目解析
 
 **交付物**
-- `parse.rs`：`parse_item_html`，抽出标题、签名、主文档、各 section、方法 / 字段 / 变体 / 关联项。
-- `parse_rustdoc_meta` / `parse_one_line` / `path_to_identity`。
+- `model.rs` 扩展：`DocItem` / `Section` / `SourceRef`。
+- `parse.rs`：`parse_item_html`（签名、主文档、分节、方法 / 字段 / 变体 / 关联项），以及 `parse_rustdoc_meta` / `parse_one_line` / `path_to_identity`。
+- 依赖：引入 `scraper`（HTML 解析）与 `htmd`（HTML→markdown）。
 - CLI：`mcp-docs show <id>`。
+- 集成测试 6 个（`tests/parse.rs`）。
 
-**验收标准**
+**验收标准**（均已达成）
 - `Demo` 签名 = `pub struct Demo { pub field: u32, }`。
-- `Demo::new` 文档 = "build a demo"；字段 `field` 文档 = "the field"。
+- `Demo::new` 文档含 "build a demo"；字段 `field` 文档含 "the field"。
 - `Kind` 识别出 A / B 两个变体。
-- `trait.DoIt.html` 的 `run` 识别为 `TyMethod`。
+- `trait.DoIt.html` 的 `run` 识别为 `TyMethod`（trait 必需方法）。
+- 噪声区块（synthetic / blanket impl）默认剥离。
 
 ## M2 — Markdown 渲染 + 链接重写 + 降噪
 
@@ -95,6 +98,7 @@
 
 **交付物**
 - 检索排序 / 分页 / 模糊匹配优化。
+- 可选增强：`all.html` 交叉校验兜底（当 `sidebar-items.js` 缺失时补全条目）。
 - 可选项：`--granularity`、`--max-doc-bytes`、`--include-auto-impls`。
 - 错误信息完善、README、发布配置（license、Cargo 元数据）。
 

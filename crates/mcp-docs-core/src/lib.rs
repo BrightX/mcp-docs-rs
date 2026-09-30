@@ -5,11 +5,15 @@
 mod discover;
 mod error;
 mod model;
+mod parse;
 mod sidebar;
 
 pub use discover::{discover_all, discover_crate, list_crates};
 pub use error::{Error, Result};
-pub use model::{DiscoveredItem, ItemId, ItemKind};
+pub use model::{DiscoveredItem, DocItem, ItemId, ItemKind, Section, SourceRef};
+pub use parse::{
+    parse_item_html, parse_one_line, parse_rustdoc_meta, path_to_identity, ParseOptions,
+};
 pub use sidebar::{parse_sidebar_file, parse_sidebar_str};
 
 /// 去掉 `window.XXX = ` 前缀与结尾 `;`，返回中间的 JSON 文本。

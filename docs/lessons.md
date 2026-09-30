@@ -48,6 +48,18 @@
 **对**：字段是 `<span id="structfield.field" class="structfield section-header">`，其后跟 `.docblock`。
 **相关**：`design.md` §1
 
+### #1.6 分节标题必须限定 `h2.section-header`
+
+**错**：只用「`class` 含 `section-header`」判断分节标题。
+**对**：字段的 `span` 也带 `section-header` class（见 #1.5），必须同时限定标签名为 `h2`，否则字段会被误判成新分节。
+**相关**：`parse.rs::is_section_header`
+
+### #1.7 成员文档有两种位置
+
+**错**：统一用「紧随其后的兄弟 `.docblock`」找成员文档。
+**对**：方法 / 关联项的文档在**最近祖先 `details` 内**（`details.method-toggle > .docblock`）；字段 / 变体的文档才是**紧随其后**。实现分两条路径：先向上找 `details`，找不到再取下一个兄弟。
+**相关**：`parse.rs::find_member_doc`
+
 ## 2. 文件系统与路径
 
 ### #2.1 文件名绝不能用 `::`
@@ -72,4 +84,11 @@
 
 ## 5. 工程、依赖与工具链
 
-（暂无条目）
+### #5.1 scraper 0.27 的 `ElementRef` API 与旧版不同
+
+**错**：按旧版写法调用 `el.children()` 取子元素、把 `el.ancestors()` / `el.next_sibling()` 的返回值当 `ElementRef` 用、用 `el.value().has_class("x")` 判断 class。
+**对**：scraper 0.27 中
+- 直接子元素用 `child_elements()`（返回 `ElementRef`）；
+- `ancestors()` / `next_sibling()` 经 `Deref` 走底层 `NodeRef`，返回 `NodeRef`，要用 `ElementRef::wrap(node)` 转回；
+- `Element::has_class` 需要额外的 `CaseSensitivity` 参数，改为自实现更省事（读 `class` 属性按空白切分）。
+**相关**：`parse.rs`、`crates/mcp-docs-core/Cargo.toml`（`scraper = "0.27"`）
