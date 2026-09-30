@@ -132,6 +132,18 @@
 **对**：父 id 加上类型标记后（#1.17），`path` 拼接结果（`doc_probe::Demo`）不再等于父 id（`doc_probe::struct.Demo`），成员复用静默失效、条目数对不上。应给 `ItemSummary` 加 `parent_id` 字段显式记录归属，不依赖字符串拼接的巧合。
 **相关**：`model.rs::ItemSummary::parent_id`、`index.rs`
 
+### #1.20 影响索引内容的改动必须递增 `schema_version`
+
+**错**：改了 id 格式（加类型标记）、增删了索引字段，却没动 `INDEX_SCHEMA_VERSION`。
+**对**：`is_stale` 只比较**产物指纹**（文件数 / mtime / 大小）与 schema 版本。解析逻辑变了但 HTML 没变时，指纹相同 → 判定"不过期" → **继续复用按旧逻辑生成的索引**。实际表现是「属性宏已支持，但 `search tool_router` 仍返回 0 条」。凡是影响索引内容的改动（字段增删、id 格式、解析行为）都要递增该常量。
+**相关**：`model.rs::INDEX_SCHEMA_VERSION`
+
+### #1.21 改了 core 必须重新编译 server 二进制
+
+**错**：改动 core 后只跑了 `cargo test` / `cargo run -p mcp-docs-cli`，没重建 `mcp-docs-server`。
+**对**：旧二进制与新二进制会**交替覆盖同一份索引** —— CLI（新）写出 schema 2 的索引，旧 server 启动时看到 `meta.schema_version(2) != 自己认为的 1`，判定过期 → 用**旧解析逻辑**全量重建（实测耗时 1m53s）并覆盖索引，属性宏又消失了。改 core 后应用 `cargo build --workspace` 确保所有二进制同步。
+**相关**：`crates/mcp-docs-server/`、`crates/mcp-docs-cli/`
+
 ## 2. 文件系统与路径
 
 ### #2.1 文件名绝不能用 `::`

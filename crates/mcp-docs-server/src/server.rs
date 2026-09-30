@@ -342,7 +342,8 @@ impl DocsServer {
             // rustdoc://{crate}/{item}：item 的 `/` 对应 `::`。
             Some(item) => {
                 let wanted = format!("{crate_name}::{}", item.replace('/', "::"));
-                // 条目 id 带类型标记（如 `struct.Demo`），这里允许省略该标记。
+                // 条目 id 带类型标记（如 `rmcp::attr.tool_router`），
+                // 这里同时接受省略标记的写法（`rmcp::tool_router`）。
                 let id = {
                     let index = self.index();
                     index
@@ -350,11 +351,10 @@ impl DocsServer {
                         .iter()
                         .find(|summary| summary.id.0 == wanted)
                         .or_else(|| {
-                            let suffix = format!("::{wanted}");
                             index
                                 .items
                                 .iter()
-                                .find(|summary| summary.id.0.ends_with(&suffix))
+                                .find(|summary| strip_kind_tags(&summary.id.0) == wanted)
                         })
                         .map(|summary| summary.id.0.clone())
                 }
@@ -445,6 +445,19 @@ fn matches_module(item: &ItemSummary, module: Option<&str>) -> bool {
         Some(module) => item.path.len() > 1 && item.path[1..].join("::").starts_with(module),
         None => true,
     }
+}
+
+/// 去掉 id 各段里的类型标记：`rmcp::attr.tool_router` → `rmcp::tool_router`。
+fn strip_kind_tags(id: &str) -> String {
+    id.split("::")
+        .map(|segment| {
+            segment
+                .split_once('.')
+                .map(|(_, name)| name)
+                .unwrap_or(segment)
+        })
+        .collect::<Vec<_>>()
+        .join("::")
 }
 
 /// 序列化为带缩进的 JSON 文本。

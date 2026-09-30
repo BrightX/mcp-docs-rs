@@ -294,4 +294,9 @@ pub struct Index {
 }
 
 /// 当前索引结构版本。
-pub const INDEX_SCHEMA_VERSION: u32 = 1;
+///
+/// 凡是**影响索引内容**的改动（字段增删、id 格式变化、解析逻辑变化）都要递增，
+/// 否则 `is_stale` 只看产物指纹，会继续复用按旧逻辑生成的索引。
+///
+/// - 2：条目 id 改为带类型标记（`serde::trait.Deserialize`），并新增 `parent_id`。
+pub const INDEX_SCHEMA_VERSION: u32 = 2;

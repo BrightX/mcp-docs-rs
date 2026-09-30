@@ -17,11 +17,11 @@ use rmcp::ServiceExt;
 )]
 struct Args {
     /// rustdoc 产物目录（`cargo doc` 的输出目录）。
-    #[arg(long, default_value = "target/doc")]
+    #[arg(long, env = "MCP_DOCS_DIR", default_value = "target/doc")]
     doc_dir: PathBuf,
 
     /// 输出目录（`index.json` / `meta.json` 的落盘根）。
-    #[arg(long, default_value = "target/doc-search")]
+    #[arg(long, env = "MCP_DOCS_OUT", default_value = "target/doc-search")]
     out_dir: PathBuf,
 }
 
