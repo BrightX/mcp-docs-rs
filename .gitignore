@@ -1,0 +1,25 @@
+debug/
+target/
+
+/temp/
+/tmp/
+
+/logs/
+*.log
+
+/dist/
+/dist-
+
+# 二进制应用：Cargo.lock 纳入版本控制（保证三端构建可复现）
+# Cargo.lock
+
+**/*.rs.bk
+
+*.pdb
+
+.vscode/
+.idea/
+*.iml
+
+# 本地工具产物
+.codegraph/
