@@ -92,3 +92,10 @@
 - `ancestors()` / `next_sibling()` 经 `Deref` 走底层 `NodeRef`，返回 `NodeRef`，要用 `ElementRef::wrap(node)` 转回；
 - `Element::has_class` 需要额外的 `CaseSensitivity` 参数，改为自实现更省事（读 `class` 属性按空白切分）。
 **相关**：`parse.rs`、`crates/mcp-docs-core/Cargo.toml`（`scraper = "0.27"`）
+
+### #5.2 Git-Bash 的 `/usr/bin/link.exe` 可能干扰 cargo 链接
+
+**错**：在 Git-Bash 里直接跑 `cargo build`，假定它必然使用 MSVC 的 `link.exe`。
+**对**：Git for Windows 自带 `/usr/bin/link.exe`（coreutils 的硬链接工具），且它在 `PATH` 里**排在 MSVC 的 `link.exe` 之前**（`which -a link` 可验证）。host 为 `x86_64-pc-windows-msvc` 时，若链接器按名字查找，会命中错误的 link，导致链接失败或行为异常。
+**规避**：把 cargo 命令放进 cmd 执行 —— `cmd //c "cargo build"`（Git-Bash 中 `/c` 需写成 `//c`）；或确保 MSVC 环境（vcvars）就位、链接器走完整路径。
+**相关**：本机 `which -a link` → `/usr/bin/link` 优先于 MSVC link
