@@ -1,5 +1,6 @@
 //! 构建索引，并可选地渲染 markdown、落盘 index.json 与 meta.json。
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -60,6 +61,18 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
         .as_ref()
         .and_then(|index| index.rustdoc_version.clone());
     let previous_items: Vec<ItemSummary> = previous.map(|index| index.items).unwrap_or_default();
+    // 预建索引，避免增量时对每个条目线性扫描整份旧索引（O(n×m)）。
+    let previous_by_id: HashMap<&str, &ItemSummary> = previous_items
+        .iter()
+        .filter(|summary| !summary.kind.is_member())
+        .map(|summary| (summary.id.0.as_str(), summary))
+        .collect();
+    let mut previous_members: HashMap<&str, Vec<&ItemSummary>> = HashMap::new();
+    for summary in previous_items.iter().filter(|s| s.kind.is_member()) {
+        if let Some(parent_id) = summary.parent_id.as_deref() {
+            previous_members.entry(parent_id).or_default().push(summary);
+        }
+    }
 
     let mut crates = Vec::new();
     let mut items = Vec::new();
@@ -79,25 +92,21 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
             let mtime = path_mtime(&html_path);
 
             // 增量：父条目未变则整体复用（含其成员）。
-            let unchanged = previous_items
-                .iter()
-                .find(|summary| summary.id.0 == entry.id.0)
+            let unchanged = previous_by_id
+                .get(entry.id.0.as_str())
                 .filter(|summary| summary.src_mtime.is_some() && summary.src_mtime == mtime);
             if let Some(previous) = unchanged {
-                items.push(previous.clone());
+                items.push((*previous).clone());
                 item_count += 1;
                 reused += 1;
 
-                // 只复用「直接属于该条目的成员」：成员的 path（含 crate）正好等于该条目 id。
-                // 不能用 id 前缀 —— 模块 `tokio::runtime` 的前缀会误收后代模块的成员
-                // （如 `tokio::runtime::Handle::spawn`），导致条目重复。
-                let parent_id = entry.id.0.as_str();
-                for member in previous_items.iter().filter(|summary| {
-                    summary.kind.is_member() && summary.path.join("::") == parent_id
-                }) {
-                    items.push(member.clone());
-                    item_count += 1;
-                    reused += 1;
+                // 成员的 `path`（含 crate）正好等于父条目 id。
+                if let Some(members) = previous_members.get(entry.id.0.as_str()) {
+                    for member in members {
+                        items.push((*member).clone());
+                        item_count += 1;
+                        reused += 1;
+                    }
                 }
                 continue;
             }
@@ -137,6 +146,7 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
                 has_members: !item.members.is_empty(),
                 file: rel_string(out_root, &item_output_path(out_root, &entry.html_path)),
                 html_path: rel_string(doc_root, &entry.html_path),
+                parent_id: None,
                 src_mtime: mtime,
             });
             item_count += 1;
@@ -162,6 +172,7 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
                         &member_output_path(out_root, &entry.html_path, member.kind, &member.name),
                     ),
                     html_path: rel_string(doc_root, &entry.html_path),
+                    parent_id: Some(item.id.0.clone()),
                     src_mtime: mtime,
                 });
                 item_count += 1;

@@ -112,7 +112,7 @@ fn member_file_has_no_duplicate_heading() {
         .expect("应识别出 Demo::new");
     let markdown = mcp_docs_core::render_member_item(member, &RenderOptions::default());
     assert!(
-        markdown.starts_with("# `doc_probe::Demo::new`"),
+        markdown.starts_with("# `doc_probe::struct.Demo::method.new`"),
         "{markdown}"
     );
     assert!(

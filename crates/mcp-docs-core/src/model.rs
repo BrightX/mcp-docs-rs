@@ -136,6 +136,22 @@ impl ItemKind {
                 | Self::Field
         )
     }
+
+    /// 条目类型在 id 与文件名里的短标记。
+    ///
+    /// 用于保证唯一性：同名但不同类型的条目很常见（如 `serde::Deserialize`
+    /// 既是 trait 又是 derive 宏），也用于区分同名的字段与方法。
+    pub fn kind_tag(&self) -> &'static str {
+        match self {
+            Self::Field => "field",
+            Self::Method => "method",
+            Self::TyMethod => "tymethod",
+            Self::AssocConst => "assocconst",
+            Self::AssocType => "assoctype",
+            Self::Variant => "variant",
+            other => other.file_prefix(),
+        }
+    }
 }
 
 /// 条目的稳定唯一标识，形如 `doc_probe::Demo::new`。
@@ -241,6 +257,9 @@ pub struct ItemSummary {
     /// 相对 `doc_root` 的源 HTML 路径，统一以 `/` 分隔。
     #[serde(default)]
     pub html_path: String,
+    /// 成员条目所属父条目的 id（非成员为 `None`）。
+    #[serde(default)]
+    pub parent_id: Option<String>,
     /// 源 HTML 的修改时间（Unix 毫秒），用于增量判断。
     #[serde(default)]
     pub src_mtime: Option<u64>,

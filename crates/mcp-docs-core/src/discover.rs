@@ -95,7 +95,8 @@ fn walk_module(
             .to_path_buf();
 
         let mut id_parts = path.to_vec();
-        id_parts.push(name.clone());
+        // 与 `DocItem` 保持一致：id 带条目类型标记，保证唯一。
+        id_parts.push(format!("{}.{}", kind.kind_tag(), name));
 
         out.push(DiscoveredItem {
             id: ItemId(id_parts.join("::")),

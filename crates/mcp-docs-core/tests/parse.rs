@@ -26,7 +26,7 @@ fn collapse(text: &str) -> String {
 #[test]
 fn parses_struct_signature_and_main_docs() {
     let item = parse("doc_probe/struct.Demo.html");
-    assert_eq!(item.id.0, "doc_probe::Demo");
+    assert_eq!(item.id.0, "doc_probe::struct.Demo");
     assert_eq!(item.kind, ItemKind::Struct);
     assert_eq!(
         collapse(item.signature.as_deref().unwrap()),
@@ -42,7 +42,7 @@ fn parses_struct_method_and_field_members() {
     let method = item
         .members
         .iter()
-        .find(|m| m.id.0 == "doc_probe::Demo::new")
+        .find(|m| m.id.0 == "doc_probe::struct.Demo::method.new")
         .expect("应识别出方法 Demo::new");
     assert_eq!(method.kind, ItemKind::Method);
     assert!(method.docs_md.as_deref().unwrap().contains("build a demo"));
@@ -50,7 +50,7 @@ fn parses_struct_method_and_field_members() {
     let field = item
         .members
         .iter()
-        .find(|m| m.id.0 == "doc_probe::Demo::field")
+        .find(|m| m.id.0 == "doc_probe::struct.Demo::field.field")
         .expect("应识别出字段 Demo::field");
     assert_eq!(field.kind, ItemKind::Field);
     assert!(field.docs_md.as_deref().unwrap().contains("the field"));
@@ -60,8 +60,14 @@ fn parses_struct_method_and_field_members() {
 fn parses_enum_variants() {
     let item = parse("doc_probe/enum.Kind.html");
     let ids: Vec<&str> = item.members.iter().map(|m| m.id.0.as_str()).collect();
-    assert!(ids.contains(&"doc_probe::Kind::A"), "成员：{ids:?}");
-    assert!(ids.contains(&"doc_probe::Kind::B"), "成员：{ids:?}");
+    assert!(
+        ids.contains(&"doc_probe::enum.Kind::variant.A"),
+        "成员：{ids:?}"
+    );
+    assert!(
+        ids.contains(&"doc_probe::enum.Kind::variant.B"),
+        "成员：{ids:?}"
+    );
 }
 
 #[test]
@@ -70,7 +76,7 @@ fn parses_trait_required_method_as_tymethod() {
     let method = item
         .members
         .iter()
-        .find(|m| m.id.0 == "doc_probe::DoIt::run")
+        .find(|m| m.id.0 == "doc_probe::trait.DoIt::tymethod.run")
         .expect("应识别出 trait 必需方法 DoIt::run");
     assert_eq!(method.kind, ItemKind::TyMethod);
 }

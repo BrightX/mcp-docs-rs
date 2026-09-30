@@ -67,23 +67,10 @@ pub fn member_output_path(
         .unwrap_or_default();
     let file = format!(
         "{stem}.{}.{}.md",
-        member_kind_tag(member_kind),
+        member_kind.kind_tag(),
         encode_fs_name(member_name)
     );
     out_root.join(sanitize_rel(dir)).join(file)
-}
-
-/// 成员类型在文件名里的短标记。
-fn member_kind_tag(kind: ItemKind) -> &'static str {
-    match kind {
-        ItemKind::Field => "field",
-        ItemKind::Method => "method",
-        ItemKind::TyMethod => "tymethod",
-        ItemKind::AssocConst => "assocconst",
-        ItemKind::AssocType => "assoctype",
-        ItemKind::Variant => "variant",
-        other => other.file_prefix(),
-    }
 }
 
 /// 原子写入：先写临时文件再 rename，避免读到写了一半的文件。

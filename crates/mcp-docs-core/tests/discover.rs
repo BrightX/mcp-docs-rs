@@ -53,12 +53,12 @@ fn discovers_all_items_in_fixture() {
     assert_eq!(
         ids,
         vec![
-            "doc_probe::inner",
-            "doc_probe::Demo",
-            "doc_probe::Kind",
-            "doc_probe::DoIt",
-            "doc_probe::free_fn",
-            "doc_probe::inner::Nested",
+            "doc_probe::mod.inner",
+            "doc_probe::struct.Demo",
+            "doc_probe::enum.Kind",
+            "doc_probe::trait.DoIt",
+            "doc_probe::fn.free_fn",
+            "doc_probe::inner::struct.Nested",
         ]
     );
 }

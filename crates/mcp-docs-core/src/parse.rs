@@ -57,8 +57,15 @@ pub fn parse_item_html(html: &str, rel_path: &Path, opts: &ParseOptions) -> Resu
         .map(|db| docblock_to_md(&db))
         .filter(|text| !text.is_empty());
 
+    // id 带条目类型标记：同名但不同类型的条目很常见
+    // （如 `serde::Deserialize` 既是 trait 又是 derive 宏），
+    // 不带类型会导致 id 冲突、增量复用互相覆盖。
+    let mut id_parts = path.clone();
+    id_parts.push(format!("{}.{}", kind.kind_tag(), name));
+    let id = ItemId(id_parts.join("::"));
+
     let mut sections = collect_sections(&main, opts);
-    let members = collect_members(&main, &path, &name);
+    let members = collect_members(&main, &path, &name, &id);
 
     // 按类型把成员归组到对应分节；找不到归属的成员仍保留在扁平列表里。
     for member in &members {
@@ -70,11 +77,8 @@ pub fn parse_item_html(html: &str, rel_path: &Path, opts: &ParseOptions) -> Resu
         }
     }
 
-    let mut id_parts = path.clone();
-    id_parts.push(name.clone());
-
     Ok(DocItem {
-        id: ItemId(id_parts.join("::")),
+        id,
         kind,
         name,
         path,
@@ -210,19 +214,36 @@ fn collect_sections(main: &ElementRef, opts: &ParseOptions) -> Vec<Section> {
 }
 
 /// 收集页面上全部成员条目（字段 / 变体 / 方法 / 关联项）。
-fn collect_members(main: &ElementRef, parent_path: &[String], parent_name: &str) -> Vec<DocItem> {
+fn collect_members(
+    main: &ElementRef,
+    parent_path: &[String],
+    parent_name: &str,
+    parent_id: &ItemId,
+) -> Vec<DocItem> {
     let mut members = Vec::new();
 
     // 字段是 `span`（不是 section），文档紧随其后。
     for anchor in main.select(&selector("span.structfield")) {
-        if let Some(member) = build_member(&anchor, ItemKind::Field, parent_path, parent_name) {
+        if let Some(member) = build_member(
+            &anchor,
+            ItemKind::Field,
+            parent_path,
+            parent_name,
+            parent_id,
+        ) {
             members.push(member);
         }
     }
 
     // 枚举变体。
     for anchor in main.select(&selector("section.variant")) {
-        if let Some(member) = build_member(&anchor, ItemKind::Variant, parent_path, parent_name) {
+        if let Some(member) = build_member(
+            &anchor,
+            ItemKind::Variant,
+            parent_path,
+            parent_name,
+            parent_id,
+        ) {
             members.push(member);
         }
     }
@@ -236,7 +257,7 @@ fn collect_members(main: &ElementRef, parent_path: &[String], parent_name: &str)
             continue;
         }
         let kind = member_kind_from_id(&anchor);
-        if let Some(member) = build_member(&anchor, kind, parent_path, parent_name) {
+        if let Some(member) = build_member(&anchor, kind, parent_path, parent_name, parent_id) {
             members.push(member);
         }
     }
@@ -250,6 +271,7 @@ fn build_member(
     kind: ItemKind,
     parent_path: &[String],
     parent_name: &str,
+    parent_id: &ItemId,
 ) -> Option<DocItem> {
     // 成员名取自锚点 id 去掉类型前缀的部分：`method.new` → `new`。
     let anchor_id = anchor.value().attr("id")?;
@@ -277,11 +299,12 @@ fn build_member(
     let mut path = parent_path.to_vec();
     path.push(parent_name.to_string());
 
-    let mut id_parts = path.clone();
-    id_parts.push(name.clone());
+    // 成员 id = 父 id + 「成员类型标记.成员名」，避免同名字段与方法冲突
+    // （如 `LitBool` 的字段 `value` 与方法 `value()`）。
+    let id = ItemId(format!("{}::{}.{}", parent_id.0, kind.kind_tag(), name));
 
     Some(DocItem {
-        id: ItemId(id_parts.join("::")),
+        id,
         kind,
         name,
         crate_name: parent_path.first().cloned().unwrap_or_default(),

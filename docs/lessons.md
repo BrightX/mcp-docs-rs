@@ -114,6 +114,24 @@
 **对**：rustdoc 把 trait 的方法列表折叠在 `<details>` 里，其 `<summary>` 文本（如 `Show 29 methods`）会混进签名。需要遍历文本时跳过 `details` 子树；方法本身已作为成员单独列出，无需重复。
 **相关**：`parse.rs::signature_text`
 
+### #1.17 条目 id 必须带类型标记，否则同名不同类型会冲突
+
+**错**：id 直接用 `{路径}::{名字}`。
+**对**：同名但不同类型的条目非常常见 —— `serde::Deserialize` / `serde::Serialize` / `schemars::JsonSchema` 既是 trait 又是 derive 宏，`tracing::event` 等宏与同名条目同理。真实项目里产生 48 个 id 冲突，进而导致增量复用互相覆盖、条目数虚增。id 改为 `{路径}::{类型标记}.{名字}`（与 rustdoc 的 `trait.Deserialize.html` / `derive.Deserialize.html` 严格对应）；成员的父 id 也随之带上标记。
+**相关**：`parse.rs`、`discover.rs`、`model.rs::kind_tag`
+
+### #1.18 增量复用必须用索引查找，不能线性扫描
+
+**错**：对每个条目 `previous_items.iter().find(...)` 查旧索引，再 `iter().filter(...)` 收成员。
+**对**：真实规模下这是 O(n×m) —— 5077 个条目 × 19231 条旧数据 ≈ 1 亿次字符串比较，增量耗时 1m1s。改为预建 `HashMap`（父按 id、成员按 `parent_id` 分组）后降到 **2.2 秒**。
+**相关**：`index.rs::build`
+
+### #1.19 成员归属要用显式的 `parent_id` 字段
+
+**错**：#1.11 用「成员的 `path` 拼接结果 == 父 id」判断归属。
+**对**：父 id 加上类型标记后（#1.17），`path` 拼接结果（`doc_probe::Demo`）不再等于父 id（`doc_probe::struct.Demo`），成员复用静默失效、条目数对不上。应给 `ItemSummary` 加 `parent_id` 字段显式记录归属，不依赖字符串拼接的巧合。
+**相关**：`model.rs::ItemSummary::parent_id`、`index.rs`
+
 ## 2. 文件系统与路径
 
 ### #2.1 文件名绝不能用 `::`

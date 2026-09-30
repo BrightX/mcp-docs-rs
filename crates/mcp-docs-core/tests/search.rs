@@ -21,11 +21,11 @@ fn index_contains_items_and_members() {
     assert_eq!(index.items.len(), 11, "{:#?}", index.items);
 
     let ids: Vec<&str> = index.items.iter().map(|item| item.id.0.as_str()).collect();
-    assert!(ids.contains(&"doc_probe::Demo"));
-    assert!(ids.contains(&"doc_probe::Demo::new"));
-    assert!(ids.contains(&"doc_probe::Demo::field"));
-    assert!(ids.contains(&"doc_probe::Kind::A"));
-    assert!(ids.contains(&"doc_probe::inner::Nested"));
+    assert!(ids.contains(&"doc_probe::struct.Demo"));
+    assert!(ids.contains(&"doc_probe::struct.Demo::method.new"));
+    assert!(ids.contains(&"doc_probe::struct.Demo::field.field"));
+    assert!(ids.contains(&"doc_probe::enum.Kind::variant.A"));
+    assert!(ids.contains(&"doc_probe::inner::struct.Nested"));
 }
 
 #[test]
@@ -34,13 +34,16 @@ fn summary_files_point_to_markdown() {
     let find = |id: &str| index.items.iter().find(|item| item.id.0 == id).unwrap();
 
     // `file` 是相对输出根目录的路径。
-    assert_eq!(find("doc_probe::Demo").file, "doc_probe/struct.Demo.md");
     assert_eq!(
-        find("doc_probe::Demo::new").file,
+        find("doc_probe::struct.Demo").file,
+        "doc_probe/struct.Demo.md"
+    );
+    assert_eq!(
+        find("doc_probe::struct.Demo::method.new").file,
         "doc_probe/struct.Demo.method.new.md"
     );
     assert_eq!(
-        find("doc_probe::inner::Nested").file,
+        find("doc_probe::inner::struct.Nested").file,
         "doc_probe/inner/struct.Nested.md"
     );
 }
@@ -51,7 +54,7 @@ fn search_finds_method_by_name() {
     let hits = search(&index, &SearchQuery::new("new"));
     assert!(
         hits.iter()
-            .any(|hit| hit.item.id.0 == "doc_probe::Demo::new"),
+            .any(|hit| hit.item.id.0 == "doc_probe::struct.Demo::method.new"),
         "{:?}",
         hits.iter().map(|h| &h.item.id.0).collect::<Vec<_>>()
     );
@@ -63,7 +66,7 @@ fn search_finds_item_by_description() {
     let hits = search(&index, &SearchQuery::new("demo struct"));
     assert_eq!(
         hits.first().map(|hit| hit.item.id.0.as_str()),
-        Some("doc_probe::Demo")
+        Some("doc_probe::struct.Demo")
     );
 }
 

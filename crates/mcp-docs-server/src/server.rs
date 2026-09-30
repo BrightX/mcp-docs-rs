@@ -341,7 +341,25 @@ impl DocsServer {
         match item {
             // rustdoc://{crate}/{item}：item 的 `/` 对应 `::`。
             Some(item) => {
-                let id = format!("{crate_name}::{}", item.replace('/', "::"));
+                let wanted = format!("{crate_name}::{}", item.replace('/', "::"));
+                // 条目 id 带类型标记（如 `struct.Demo`），这里允许省略该标记。
+                let id = {
+                    let index = self.index();
+                    index
+                        .items
+                        .iter()
+                        .find(|summary| summary.id.0 == wanted)
+                        .or_else(|| {
+                            let suffix = format!("::{wanted}");
+                            index
+                                .items
+                                .iter()
+                                .find(|summary| summary.id.0.ends_with(&suffix))
+                        })
+                        .map(|summary| summary.id.0.clone())
+                }
+                .ok_or_else(|| McpError::invalid_params(format!("未找到条目 `{wanted}`"), None))?;
+
                 self.get_item(Parameters(ItemParams {
                     id,
                     max_bytes: None,
