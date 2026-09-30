@@ -56,6 +56,7 @@ Agent 需要知道 `tokio::spawn` 的签名与用法 →
 |---|---|
 | 数据源 | 解析 `cargo doc` 生成的 HTML。**不用 rustdoc JSON**，因其至今 unstable，需 nightly 或 `RUSTC_BOOTSTRAP=1` |
 | 文档来源 | 仅本地 `target/doc`，**不联网**（不接 docs.rs） |
+| 索引范围 | 默认覆盖 `crates.js` 列出的**全部 crate（含所有依赖）**，跟随 `cargo doc` 的默认行为；查询与导出阶段可按 crate 过滤 |
 | 工程结构 | 3-crate workspace：`mcp-docs-core`（纯库）/ `mcp-docs-cli` / `mcp-docs-server` |
 | 检索粒度 | 按条目分文件 + 全局索引；成员独立成文件**且**内联进父文件 |
 | 输出位置 | 可配置，默认项目内 `target/doc-search/`；CLI `--out` 与 server 启动参数可覆盖 |

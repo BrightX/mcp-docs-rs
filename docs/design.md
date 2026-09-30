@@ -183,6 +183,8 @@ pub fn rank(item: &ItemSummary, q: &str) -> i32;   // 精确名 > 前缀 > path 
 
 ### 5.1 全局发现
 
+**索引范围**：默认覆盖 `crates.js` 列出的**全部 crate，含所有依赖** —— 即跟随 `cargo doc` 的默认行为（用户若加 `--no-deps`，则只有当前 crate）。这符合「Agent 需要查依赖 API」的诉求；发现阶段只读 `sidebar-items.js`（轻量），正文按需解析，因此全量范围开销可控。查询与导出阶段可按 crate 过滤。
+
 1. `list_crates`：读 `crates.js` 解析数组；用目录存在性过滤；排除 `src/`、`static.files/`、`trait.impl/`。
 2. `discover_crate`：从 `doc_root/<crate>` 起递归 `walk_module`；每层读 `sidebar-items.js`，`mod` 项下钻子目录，其余按 `{file_prefix}.{name}.html` 产出 `DiscoveredItem{ id = crate::mod::…::name }`。文件缺失记 warning，不 panic。
 3. 兜底：sidebar 缺失时扫描目录下 `^(struct|enum|trait|fn|type|constant|static|macro|union|primitive)\.(.+)\.html$`。
