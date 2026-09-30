@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::cache::{fingerprint_doc_root, path_mtime, write_meta, Meta};
 use crate::discover;
 use crate::error::Result;
-use crate::markdown::{render_item, render_member_item, RenderOptions};
+use crate::markdown::{render_item, render_member_item, rewrite_links, LinkStyle, RenderOptions};
 use crate::model::{CrateSummary, Index, ItemSummary, INDEX_SCHEMA_VERSION};
 use crate::parse::{self, ParseOptions};
 use crate::store::{atomic_write, item_output_path, member_output_path};
@@ -141,7 +141,11 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
                 kind: item.kind,
                 name: item.name.clone(),
                 path: item.path.clone(),
-                one_line: parse::parse_one_line(&html).unwrap_or_default(),
+                // 摘要可能含 rustdoc 生成的 markdown 链接，统一重写为 `.md`。
+                one_line: rewrite_links(
+                    &parse::parse_one_line(&html).unwrap_or_default(),
+                    LinkStyle::Relative,
+                ),
                 has_docs: item.docs_md.is_some(),
                 has_members: !item.members.is_empty(),
                 file: rel_string(out_root, &item_output_path(out_root, &entry.html_path)),
@@ -164,7 +168,10 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
                     kind: member.kind,
                     name: member.name.clone(),
                     path: member.path.clone(),
-                    one_line: first_line(member.docs_md.as_deref()),
+                    one_line: rewrite_links(
+                        &first_line(member.docs_md.as_deref()),
+                        LinkStyle::Relative,
+                    ),
                     has_docs: member.docs_md.is_some(),
                     has_members: false,
                     file: rel_string(

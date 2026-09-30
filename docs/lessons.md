@@ -144,6 +144,18 @@
 **对**：旧二进制与新二进制会**交替覆盖同一份索引** —— CLI（新）写出 schema 2 的索引，旧 server 启动时看到 `meta.schema_version(2) != 自己认为的 1`，判定过期 → 用**旧解析逻辑**全量重建（实测耗时 1m53s）并覆盖索引，属性宏又消失了。改 core 后应用 `cargo build --workspace` 确保所有二进制同步。
 **相关**：`crates/mcp-docs-server/`、`crates/mcp-docs-cli/`
 
+### #1.22 链接重写要解析链接目标，不能用 `.html)` 字符串替换
+
+**错**：`LinkStyle::Relative` 用 `markdown.replace(".html)", ".md)")` 重写链接。
+**对**：htmd 会把 rustdoc 的 `<a title="...">` 转成**带 title 的 markdown 链接** —— 形如 `` [`JoinHandle`](struct.JoinHandle.html "struct tokio::task::JoinHandle") ``，`.html` 后面跟的是空格 + 引号，`".html)"` 与 `".html#"` 都匹配不上，链接**静默保持 `.html`**，导出的文件树里点不开。正确做法是扫描 `](目标)`、只重写**目标里的路径部分**（保留 title 与锚点），顺带避免误改正文里出现的 `.html` 字样。同一问题也影响 `one_line` 摘要（它取自 rustdoc 的 `meta description`，同样是 markdown 形式），故摘要也要过一遍重写。
+**相关**：`markdown.rs::rewrite_links`、`index.rs` 的 `one_line` 生成
+
+### #1.23 源码路径要归一化到 `doc_root`
+
+**错**：`get_item_source` 直接返回页面里的 `href` 原值，如 `../../src/tokio/task/spawn.rs.html`。
+**对**：这是**相对当前 HTML 页面**的路径，换个页面就失效，调用方无法据此打开文件。应复用 `link::resolve_href` 归一化成**相对 `doc_root`** 的规范路径（`src/tokio/task/spawn.rs.html`），调用方（MCP server）再拼上 `--doc-dir` 得到绝对路径。
+**相关**：`parse.rs::parse_source_href`、`server.rs::get_item_source`
+
 ## 2. 文件系统与路径
 
 ### #2.1 文件名绝不能用 `::`
@@ -164,7 +176,11 @@
 
 ## 4. MCP 接口
 
-（暂无条目）
+### #4.1 过滤器参数无法识别时必须报错，不能静默忽略
+
+**错**：`list_items` / `search_items` 的 `kind` 用 `ItemKind::from_file_prefix(value)` 解析，取不到就当作"不限定"。
+**对**：`from_file_prefix` 只认**文件名前缀**（`fn` / `struct`），而工具描述里推荐的 `method`、以及更自然的 `function` 都不在其中；传这些值时过滤器**被静默忽略**，返回的是**全部类型**——Agent 会以为已过滤，得出错误结论。且 `from_file_prefix` 根本不含成员类型（`method` / `field` / `variant`）。修复：新增 `ItemKind::parse_input`（前缀 + 复数 + 自然名，自然名走 serde 反序列化，与 `index.json` 的 `kind` 同源），无法识别时**返回错误**。
+**相关**：`model.rs::ItemKind::parse_input`、`server.rs::parse_kind`
 
 ## 5. 工程、依赖与工具链
 

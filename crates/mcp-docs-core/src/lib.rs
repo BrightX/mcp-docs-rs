@@ -21,7 +21,7 @@ pub use discover::{discover_all, discover_crate, list_crates};
 pub use error::{Error, Result};
 pub use index::{build, build_index, load_index, write_index, BuildOptions, BuildReport};
 pub use link::{html_to_md_relpath, resolve_href, Resolved};
-pub use markdown::{render_item, render_member_item, LinkStyle, RenderOptions};
+pub use markdown::{render_item, render_member_item, rewrite_links, LinkStyle, RenderOptions};
 pub use model::{
     CrateSummary, DiscoveredItem, DocItem, Index, ItemId, ItemKind, ItemSummary, Section,
     SourceRef, INDEX_SCHEMA_VERSION,

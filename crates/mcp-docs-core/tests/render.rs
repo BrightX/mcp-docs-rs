@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use mcp_docs_core::{
     encode_fs_name, item_output_path, member_output_path, parse_item_html, render_item,
-    resolve_href, DocItem, ItemKind, ParseOptions, RenderOptions, Resolved,
+    resolve_href, rewrite_links, DocItem, ItemKind, LinkStyle, ParseOptions, RenderOptions,
+    Resolved,
 };
 
 /// fixture 根目录，等价于一个 `target/doc`。
@@ -95,11 +96,66 @@ fn renders_struct_markdown_without_noise() {
     assert!(markdown.contains("## Methods"));
     assert!(markdown.contains("### `new`"), "缺少方法小节：\n{markdown}");
     assert!(markdown.contains("build a demo"));
-    // 链接已重写为 .md。
+    // 链接已重写为 .md（含带 title 的 htmd 形式 `.html "标题")`）。
     assert!(
-        !markdown.contains(".html)"),
+        !markdown.contains(".html)") && !markdown.contains(".html \""),
         "链接未重写为 .md：\n{markdown}"
     );
+}
+
+#[test]
+fn rewrites_link_targets_keeping_title_and_anchor() {
+    // htmd 会把 rustdoc 的 `<a title="...">` 转成带 title 的 markdown 链接，
+    // 此时 `.html` 后面跟的是空格 + 引号，旧的 `.html)` 替换会漏掉。
+    assert_eq!(
+        rewrite_links(
+            "[`JoinHandle`](struct.JoinHandle.html \"struct tokio::task::JoinHandle\")",
+            LinkStyle::Relative
+        ),
+        "[`JoinHandle`](struct.JoinHandle.md \"struct tokio::task::JoinHandle\")"
+    );
+    // 带锚点的链接。
+    assert_eq!(
+        rewrite_links(
+            "[`run`](../struct.Foo.html#method.run \"struct Foo\")",
+            LinkStyle::Relative
+        ),
+        "[`run`](../struct.Foo.md#method.run \"struct Foo\")"
+    );
+    // 外链与正文里出现的 `.html` 不被误改。
+    assert_eq!(
+        rewrite_links(
+            "见 https://example.com/a.html 与正文里的 `foo.html` 字样",
+            LinkStyle::Relative
+        ),
+        "见 https://example.com/a.html 与正文里的 `foo.html` 字样"
+    );
+    // PlainPath 把链接压成纯文本。
+    assert_eq!(
+        rewrite_links(
+            "[`Foo`](struct.Foo.html \"struct Foo\")",
+            LinkStyle::PlainPath
+        ),
+        "`Foo`"
+    );
+}
+
+#[test]
+fn parses_kind_input_in_multiple_forms() {
+    // 文件名前缀。
+    assert_eq!(ItemKind::parse_input("fn"), Some(ItemKind::Function));
+    assert_eq!(ItemKind::parse_input("struct"), Some(ItemKind::Struct));
+    assert_eq!(ItemKind::parse_input("attr"), Some(ItemKind::Attribute));
+    // 自然名单数与复数。
+    assert_eq!(ItemKind::parse_input("function"), Some(ItemKind::Function));
+    assert_eq!(ItemKind::parse_input("functions"), Some(ItemKind::Function));
+    // 成员类型（`from_file_prefix` 不含这些，正是早先静默失效的原因）。
+    assert_eq!(ItemKind::parse_input("method"), Some(ItemKind::Method));
+    assert_eq!(ItemKind::parse_input("field"), Some(ItemKind::Field));
+    assert_eq!(ItemKind::parse_input("variant"), Some(ItemKind::Variant));
+    // 大小写不敏感；无法识别的返回 None。
+    assert_eq!(ItemKind::parse_input("Field"), Some(ItemKind::Field));
+    assert_eq!(ItemKind::parse_input("nope"), None);
 }
 
 #[test]

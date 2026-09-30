@@ -161,12 +161,67 @@ fn source_label(source: &SourceRef) -> String {
 }
 
 /// 按输出风格重写 markdown 中的链接。
-fn rewrite_links(markdown: &str, style: LinkStyle) -> String {
+///
+/// 对外可见，供 `one_line` 摘要等复用（见 `docs/lessons.md` #1.22）。
+pub fn rewrite_links(markdown: &str, style: LinkStyle) -> String {
     match style {
         LinkStyle::KeepOriginal => markdown.to_string(),
-        // markdown 文件树镜像 HTML 目录结构，相对关系一致，只需换扩展名。
-        LinkStyle::Relative => markdown.replace(".html)", ".md)").replace(".html#", ".md#"),
+        LinkStyle::Relative => rewrite_link_targets(markdown),
         LinkStyle::PlainPath => strip_links(markdown),
+    }
+}
+
+/// 把 markdown 链接目标里的 `.html` 换成 `.md`。
+///
+/// 只处理 `](目标)` 里的目标，因此正文里出现的 `.html` 不会被误改。
+/// htmd 生成的目标可能带 title（如 `struct.Foo.html "struct Foo"`）
+/// 或锚点（`struct.Foo.html#method.bar`），这些都需保留。
+fn rewrite_link_targets(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut rest = markdown;
+
+    while let Some(open) = rest.find("](") {
+        out.push_str(&rest[..open + 2]);
+        let body = &rest[open + 2..];
+        match body.find(')') {
+            Some(close) => {
+                out.push_str(&rewrite_one_target(&body[..close]));
+                out.push(')');
+                rest = &body[close + 1..];
+            }
+            None => {
+                out.push_str(body);
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 重写单个链接目标：路径换扩展名，title 原样保留。
+fn rewrite_one_target(target: &str) -> String {
+    // title 紧跟一个空白（`path "title"`），路径本身不含空白。
+    let (path, rest) = match target.find(char::is_whitespace) {
+        Some(idx) => (&target[..idx], &target[idx..]),
+        None => (target, ""),
+    };
+    format!("{}{rest}", rewrite_path_ext(path))
+}
+
+/// 把路径结尾的 `.html` 换成 `.md`，锚点原样保留。
+fn rewrite_path_ext(path: &str) -> String {
+    let (before, anchor) = match path.split_once('#') {
+        Some((head, anchor)) => (head, Some(anchor)),
+        None => (path, None),
+    };
+    let rewritten = match before.strip_suffix(".html") {
+        Some(stem) => format!("{stem}.md"),
+        None => before.to_string(),
+    };
+    match anchor {
+        Some(anchor) => format!("{rewritten}#{anchor}"),
+        None => rewritten,
     }
 }
 

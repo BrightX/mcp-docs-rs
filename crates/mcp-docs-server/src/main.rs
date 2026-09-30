@@ -28,7 +28,13 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let service = server::DocsServer::new(args.doc_dir, args.out_dir)?
+
+    // 规范化为绝对路径：`get_item_source` 返回的 `path` 才算「可直接打开」，
+    // 且不受客户端工作目录影响。
+    let doc_dir = std::path::absolute(&args.doc_dir).unwrap_or(args.doc_dir);
+    let out_dir = std::path::absolute(&args.out_dir).unwrap_or(args.out_dir);
+
+    let service = server::DocsServer::new(doc_dir, out_dir)?
         .serve(stdio())
         .await?;
     service.waiting().await?;

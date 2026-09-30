@@ -30,7 +30,7 @@ struct ListItemsParams {
     crate_name: Option<String>,
     /// 限定模块路径（如 `inner`）。
     module: Option<String>,
-    /// 限定条目类型（如 `struct` / `fn` / `method`）。
+    /// 限定条目类型，接受 `fn`（前缀）或 `function`（自然名）。
     kind: Option<String>,
     /// 返回上限，默认 100。
     limit: Option<usize>,
@@ -127,9 +127,12 @@ impl DocsServer {
 
     /// 列出条目摘要（不含正文）。
     #[tool(description = "列出条目摘要（可按 crate / 模块 / 类型过滤），不含正文")]
-    fn list_items(&self, Parameters(params): Parameters<ListItemsParams>) -> String {
+    fn list_items(
+        &self,
+        Parameters(params): Parameters<ListItemsParams>,
+    ) -> Result<String, String> {
         let index = self.index();
-        let kind = params.kind.as_deref().and_then(ItemKind::from_file_prefix);
+        let kind = params.kind.as_deref().map(parse_kind).transpose()?;
 
         let filtered: Vec<&ItemSummary> = index
             .items
@@ -146,16 +149,19 @@ impl DocsServer {
             .map(|item| summary_json(item))
             .collect();
 
-        to_json(&serde_json::json!({
+        Ok(to_json(&serde_json::json!({
             "total": filtered.len(),
             "returned": items.len(),
             "items": items,
-        }))
+        })))
     }
 
     /// 检索条目。
     #[tool(description = "按名字 / 路径 / 摘要检索条目，返回轻量摘要与得分")]
-    fn search_items(&self, Parameters(params): Parameters<SearchItemsParams>) -> String {
+    fn search_items(
+        &self,
+        Parameters(params): Parameters<SearchItemsParams>,
+    ) -> Result<String, String> {
         let index = self.index();
         let mut query = SearchQuery::new(params.query);
         query.crate_name = params.crate_name;
@@ -165,7 +171,7 @@ impl DocsServer {
             Some("fuzzy") => MatchMode::Fuzzy,
             _ => MatchMode::Substring,
         };
-        if let Some(kind) = params.kind.as_deref().and_then(ItemKind::from_file_prefix) {
+        if let Some(kind) = params.kind.as_deref().map(parse_kind).transpose()? {
             query.kinds.push(kind);
         }
 
@@ -179,7 +185,9 @@ impl DocsServer {
             })
             .collect();
 
-        to_json(&serde_json::json!({ "returned": items.len(), "hits": items }))
+        Ok(to_json(
+            &serde_json::json!({ "returned": items.len(), "hits": items }),
+        ))
     }
 
     /// 读取条目的完整 markdown。
@@ -221,9 +229,11 @@ impl DocsServer {
         let item = self.load_item(summary)?;
 
         // 成员自身的源码位置未单独采集，这里返回其所属条目的位置。
+        // `file` 为相对 `--doc-dir` 的规范路径，`path` 为可直接打开的绝对路径。
         let source = item.source.as_ref().map(|source| {
             serde_json::json!({
                 "file": source.file,
+                "path": self.doc_dir.join(&source.file).to_string_lossy(),
                 "line_start": source.line_start,
                 "line_end": source.line_end,
             })
@@ -373,23 +383,34 @@ impl DocsServer {
 
     /// 列出某个 crate 的全部条目摘要。
     fn crate_listing(&self, crate_name: &str) -> Result<String, McpError> {
+        // 资源没有分页参数，这里设安全上限，避免大 crate（rmcp 2000+ 条）
+        // 返回超大 JSON 撑爆上下文；细粒度浏览应改用 `list_items`。
+        const LIMIT: usize = 500;
+
         let index = self.index();
-        let items: Vec<serde_json::Value> = index
+        let all: Vec<&ItemSummary> = index
             .items
             .iter()
             .filter(|item| matches_crate(item, Some(crate_name)))
-            .map(summary_json)
             .collect();
 
-        if items.is_empty() {
+        if all.is_empty() {
             return Err(McpError::invalid_params(
                 format!("未找到 crate `{crate_name}`"),
                 None,
             ));
         }
+
+        let items: Vec<serde_json::Value> = all
+            .iter()
+            .take(LIMIT)
+            .map(|item| summary_json(item))
+            .collect();
         Ok(to_json(&serde_json::json!({
             "crate": crate_name,
-            "item_count": items.len(),
+            "item_count": all.len(),
+            "returned": items.len(),
+            "truncated": all.len() > items.len(),
             "items": items,
         })))
     }
@@ -428,6 +449,18 @@ fn summary_json(item: &ItemSummary) -> serde_json::Value {
         "has_docs": item.has_docs,
         "has_members": item.has_members,
         "file": item.file,
+    })
+}
+
+/// 解析 `kind` 参数。
+///
+/// 无法识别的值直接报错，避免像早先那样静默忽略过滤器、误返回全部类型
+/// （见 `docs/lessons.md` #1.23）。
+fn parse_kind(value: &str) -> Result<ItemKind, String> {
+    ItemKind::parse_input(value).ok_or_else(|| {
+        format!(
+            "无法识别的 kind：`{value}`（可用：struct / fn / method / field / trait / macro 等）"
+        )
     })
 }
 

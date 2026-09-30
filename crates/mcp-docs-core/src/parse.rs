@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use scraper::{ElementRef, Html, Node, Selector};
 
 use crate::error::{Error, Result};
+use crate::link::{resolve_href, Resolved};
 use crate::model::{DocItem, ItemId, ItemKind, Section, SourceRef};
 
 /// 解析选项。
@@ -49,7 +50,7 @@ pub fn parse_item_html(html: &str, rel_path: &Path, opts: &ParseOptions) -> Resu
         .select(&selector(".main-heading a.src"))
         .next()
         .and_then(|el| el.value().attr("href"))
-        .and_then(parse_source_href);
+        .and_then(|href| parse_source_href(href, rel_path));
 
     let docs_md = main
         .select(&selector("details.top-doc .docblock"))
@@ -181,15 +182,30 @@ fn extract_attr(tag: &str, name: &str) -> Option<String> {
 }
 
 /// 解析源码链接，如 `../src/doc_probe/lib.rs.html#15-18`。
-fn parse_source_href(href: &str) -> Option<SourceRef> {
-    let (file, fragment) = href.split_once('#').unwrap_or((href, ""));
+///
+/// `current_rel` 为当前页面相对 `doc_root` 的路径。结果里的 `file` 会被
+/// 归一化成**相对 `doc_root`** 的路径（`src/...`），调用方配合 `--doc-dir`
+/// 即可直接定位；若沿用原始的 `../../src/...`，对使用者毫无意义。
+fn parse_source_href(href: &str, current_rel: &Path) -> Option<SourceRef> {
+    let (file, fragment) = match resolve_href(href, current_rel) {
+        Resolved::Source { rel, anchor } | Resolved::Item { rel, anchor } => (
+            rel.to_string_lossy().replace('\\', "/"),
+            anchor.unwrap_or_default(),
+        ),
+        Resolved::External(url) => (url, String::new()),
+        Resolved::InPage(_) => return None,
+    };
+    if file.is_empty() {
+        return None;
+    }
+
     let (line_start, line_end) = match fragment.split_once('-') {
         Some((start, end)) => (start.parse().ok(), end.parse().ok()),
         None if !fragment.is_empty() => (fragment.parse().ok(), fragment.parse().ok()),
         None => (None, None),
     };
     Some(SourceRef {
-        file: file.to_string(),
+        file,
         line_start,
         line_end,
     })

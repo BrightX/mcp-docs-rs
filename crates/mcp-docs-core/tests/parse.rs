@@ -100,3 +100,14 @@ fn parses_rustdoc_meta_and_one_line() {
     assert_eq!(krate, "doc_probe");
     assert_eq!(parse_one_line(&html).unwrap(), "A demo struct.");
 }
+
+#[test]
+fn normalizes_source_path_relative_to_doc_root() {
+    // 页面里的源码链接是 `../src/doc_probe/lib.rs.html#10-13`（相对当前页面），
+    // 归一化后应是相对 doc_root 的 `src/doc_probe/lib.rs.html`。
+    let item = parse("doc_probe/struct.Demo.html");
+    let source = item.source.expect("应识别出源码链接");
+    assert_eq!(source.file, "src/doc_probe/lib.rs.html");
+    assert_eq!(source.line_start, Some(10));
+    assert_eq!(source.line_end, Some(13));
+}

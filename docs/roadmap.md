@@ -119,11 +119,13 @@
 - 修复大规模暴露的两个缺陷：增量复用误收后代成员（lessons #1.11）、成员文件名同名冲突（lessons #1.12）。
 - 在根项目自身（123 crate / 19231 条目）上验证并修复三处缺口：属性宏未被索引（#1.14）、宏重定向页导致构建中断（#1.15）、trait 签名混入折叠控件文本（#1.16）。
 - 增量导出性能：全量 2m52s → 增量 **2.2s**（预建 HashMap 索引，见 lessons #1.18）；条目 id 加类型标记以保证唯一（#1.17、#1.19）。
+- 再次用 MCP Inspector CLI 调试全部 6 个工具与 3 类资源，修复四处缺陷：链接重写对带 title 的链接失效（#1.22）、源码路径未归一化到 `doc_root`（#1.23）、`kind` 过滤器被静默忽略（#4.1）、资源 crate 清单无上限（大 crate 会返回超大 JSON）。
 
 **验收标准**（均已达成）
 - 全量导出 5526 个 md 耗时 46 秒；二次增量 1.0 秒（复用 5523）。
 - 条目数 == 落盘文件数 == 5526（无覆盖）。
 - `search_items("spawn", crate="tokio")` 命中且无重复；`get_item(..., max_bytes)` 正确截断。
+- MCP 全能力（`tools/list`、6 个 `tools/call`、`resources/list`、`resources/templates/list`、`resources/read`）经 Inspector CLI 复验通过。
 - 真实规模下 MCP stdio 联调通过。
 
 **未做（记录为按需增强）**

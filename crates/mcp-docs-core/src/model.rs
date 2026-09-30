@@ -124,6 +124,21 @@ impl ItemKind {
         }
     }
 
+    /// 解析用户输入的条目类型名。
+    ///
+    /// 同时接受文件名前缀（`fn` / `attr`）、复数形式（`functions`）
+    /// 与自然名单数（`function` / `method` / `field`），
+    /// 便于 MCP 工具的 `kind` 参数按直觉传值。
+    ///
+    /// 自然名走 serde 反序列化，与 `index.json` 里的 `kind` 字段保持同源，
+    /// 避免再维护一份映射表。
+    pub fn parse_input(input: &str) -> Option<Self> {
+        let key = input.trim().to_ascii_lowercase();
+        Self::from_file_prefix(&key)
+            .or_else(|| Self::from_sidebar_key(&key))
+            .or_else(|| serde_json::from_str::<Self>(&format!("\"{key}\"")).ok())
+    }
+
     /// 是否为成员子条目（挂在父条目下，而非独立成页）。
     pub fn is_member(&self) -> bool {
         matches!(
@@ -299,4 +314,5 @@ pub struct Index {
 /// 否则 `is_stale` 只看产物指纹，会继续复用按旧逻辑生成的索引。
 ///
 /// - 2：条目 id 改为带类型标记（`serde::trait.Deserialize`），并新增 `parent_id`。
-pub const INDEX_SCHEMA_VERSION: u32 = 2;
+/// - 3：`one_line` 摘要里的链接重写为 `.md`，源码路径归一化为相对 `doc_root`。
+pub const INDEX_SCHEMA_VERSION: u32 = 3;

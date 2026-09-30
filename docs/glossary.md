@@ -64,3 +64,5 @@
 | #3.12 | 检索模块 | 检索与排序 | `crates/mcp-docs-core/src/search.rs` |
 | #3.13 | 缓存模块 | 指纹、meta、解析缓存 | `crates/mcp-docs-core/src/cache.rs` |
 | #3.14 | server 模块 | MCP 工具与资源实现 | `crates/mcp-docs-server/src/server.rs` |
+| #3.15 | kind 参数、类型过滤 | 条目类型名的用户输入解析（前缀 / 复数 / 自然名） | `model.rs::ItemKind::parse_input`；`server.rs::parse_kind` |
+| #3.16 | 源码位置、source | 条目对应的源码文件与行号 | `parse.rs::parse_source_href`；MCP `get_item_source` |
