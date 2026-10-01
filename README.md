@@ -32,8 +32,8 @@ cargo run -p mcp-docs-cli -- search "spawn" --crate tokio
 |---|---|
 | `mcp-docs tree` | 打印条目树（调试用） |
 | `mcp-docs show <id>` | 解析并打印单个条目 |
-| `mcp-docs export [--incremental] [--crate NAME]` | 导出 markdown + `index.json` + `meta.json` |
-| `mcp-docs search <query> [--limit] [--mode] [--crate] [--kind]` | 检索条目 |
+| `mcp-docs export [--incremental] [--crate NAME] [--granularity member\|item]` | 导出 markdown + `index.json` + `meta.json` |
+| `mcp-docs search <query> [--limit] [--offset] [--mode] [--crate] [--kind]` | 检索条目 |
 
 全局参数：`--doc-dir`（默认 `target/doc`）、`--out`（默认 `target/doc-search`）。
 
@@ -48,8 +48,8 @@ cargo run -p mcp-docs-server -- --doc-dir target/doc --out-dir target/doc-search
 | 工具 | 用途 |
 |---|---|
 | `list_crates` | 列出已索引的 crate |
-| `list_items` | 列出条目摘要（按 crate / 模块 / 类型过滤） |
-| `search_items` | 检索条目，返回轻量摘要与得分 |
+| `list_items` | 列出条目摘要（按 crate / 模块 / 类型过滤，支持 `offset` 分页） |
+| `search_items` | 检索条目，返回轻量摘要与得分（支持 `offset` 分页） |
 | `get_item` | 读取条目的完整 markdown |
 | `get_item_source` | 查询条目的源码位置 |
 | `rebuild_index` | 重建索引（默认增量） |

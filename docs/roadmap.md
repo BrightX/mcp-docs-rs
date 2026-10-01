@@ -11,6 +11,7 @@
 | M4 | 缓存 / 增量 / 指纹 | ✅ 已完成 |
 | M5 | MCP Server | ✅ 已完成 |
 | M6 | 打磨与真实规模验证 | ✅ 已完成 |
+| M7 | 遗留特性补齐（分页 / 导出粒度 / all.html 兜底） | ✅ 已完成 |
 
 状态标记：⬜ 未开始 / 🟡 进行中 / ✅ 已完成 / ⛔ 阻塞。
 
@@ -19,7 +20,7 @@
 **交付物**
 - workspace 骨架：`mcp-docs-core`（纯库）+ `mcp-docs-cli`，根 `Cargo.toml` 统一依赖版本。`mcp-docs-server` 推迟到 M5 建立（避免无用的占位 main）。
 - `sidebar.rs`：`parse_sidebar_str` / `parse_sidebar_file`。
-- `discover.rs`：`list_crates` + `discover_crate` + `discover_all`（递归 sidebar）。`all.html` 兜底与交叉校验经评估价值有限（sidebar 已能完整覆盖），改为 M6 的按需增强。
+- `discover.rs`：`list_crates` + `discover_crate` + `discover_all`（递归 sidebar）。`all.html` 兜底与交叉校验推迟到 M7 的按需增强。
 - CLI：`mcp-docs tree`。
 - 测试 fixture：从 `temp/doc_probe/target/doc` 裁剪拷贝到 `tests/fixtures/doc_probe/`（约 99 KB）。
 - 集成测试 5 个，全部通过。
@@ -59,7 +60,7 @@
 - 代码示例带 ```rust 围栏。
 - 链接重写为 `.md`（默认 `Relative`；`PlainPath` / `KeepOriginal` 亦实现）。
 - `encode_fs_name` 对 `Demo<Bar>` / `CON` / `Demo::new` / 空串的断言通过。
-- 条目文件 + 成员独立文件按 `target/doc-search/` 结构落盘（fixture 导出 11 个文件）。
+- 条目文件 + 成员独立文件按 `target/doc-search/` 结构落盘（fixture 导出 11 个文件；默认 `member` 粒度，`item` 粒度下只写顶层条目）。
 
 ## M3 — 索引 + 检索
 
@@ -131,10 +132,22 @@
 - rustdoc 1.98.1 下全量导出 18922 条目（114 crate）；Inspector 复验 6 工具 + 3 资源全部通过（含省略类型标记的 id、非法 `kind` 报错、`max_bytes` 截断）。
 
 **未做（记录为按需增强）**
-- `all.html` 交叉校验兜底（`sidebar-items.js` 已能完整覆盖，暂不需要）。
-- 检索分页 `offset`、`--granularity`、`--include-auto-impls`。
+- `--include-auto-impls`（保留 rustdoc 的 synthetic / blanket impl 噪声区块）。
 - 发布形态元数据（crates.io 的 `repository` / `keywords` 等）。
 - 宏生成的内部方法噪声（如 rmcp `#[tool]` 展开的 `list_crates_tool_attr`）：HTML 结构与普通方法同构，无通用可辨识信号，暂不特殊过滤。
+
+## M7 — 遗留特性补齐
+
+**交付物**
+- 检索 / 列表分页 `offset`：`SearchQuery` 新增 `offset`，新增 `search_page`（返回分页前 `total` 与当前页 `hits`）；MCP `list_items` / `search_items` 与 CLI `search` 均支持。
+- 导出粒度 `--granularity`（两档）：`member`（默认，成员单独落盘）/ `item`（只写顶层条目、成员仅内联）；索引记录 `granularity`，增量构建在 schema 或粒度变化时全量重建。
+- 发现阶段 `all.html` 交叉校验兜底：新增 `allpage.rs`，补全 `sidebar-items.js` 与目录扫描都遗漏的条目（如未列出的子模块）。
+- 索引结构版本递增至 5。
+
+**验收标准**
+- `search --offset 2 --limit 2` 与整体结果切片一致且无重叠；`offset` 越界 / `limit=0` 返回空；`total` 与分页无关。
+- `export --granularity item` 不写成员文件、`written`==顶层条目数、成员摘要 `file` 指向父文件；切换粒度后增量构建 `reused==0`。
+- `all.html` 能补全 sidebar 遗漏的子模块条目，且不产生重复（fixture 仍为 6 项、顺序不变）。
 
 ## 工作约定
 

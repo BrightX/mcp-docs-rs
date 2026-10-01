@@ -39,6 +39,9 @@ enum Command {
         /// 增量：复用未变化条目，只重建改动的部分。
         #[arg(long)]
         incremental: bool,
+        /// 导出粒度：`member`（成员单独落盘，默认）/ `item`（成员只内联）。
+        #[arg(long, value_enum, default_value_t = GranularityArg::Member)]
+        granularity: GranularityArg,
     },
     /// 检索条目。
     Search {
@@ -47,6 +50,9 @@ enum Command {
         /// 返回上限。
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        /// 跳过的命中数（分页）。
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
         /// 匹配模式。
         #[arg(long, value_enum, default_value_t = ModeArg::Substring)]
         mode: ModeArg,
@@ -71,6 +77,25 @@ enum ModeArg {
     Fuzzy,
 }
 
+/// 命令行侧的导出粒度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+enum GranularityArg {
+    /// 成员单独落盘（默认）。
+    #[default]
+    Member,
+    /// 只写顶层条目，成员仅内联。
+    Item,
+}
+
+impl From<GranularityArg> for mcp_docs_core::Granularity {
+    fn from(value: GranularityArg) -> Self {
+        match value {
+            GranularityArg::Member => Self::Member,
+            GranularityArg::Item => Self::Item,
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(&cli) {
@@ -89,10 +114,18 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Export {
             crate_name,
             incremental,
-        } => export(&cli.doc_dir, &cli.out, *incremental, crate_name.as_deref()),
+            granularity,
+        } => export(
+            &cli.doc_dir,
+            &cli.out,
+            *incremental,
+            crate_name.as_deref(),
+            (*granularity).into(),
+        ),
         Command::Search {
             query,
             limit,
+            offset,
             mode,
             crate_name,
             kind,
@@ -101,6 +134,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             &cli.out,
             query,
             *limit,
+            *offset,
             *mode,
             crate_name.as_deref(),
             kind.as_deref(),
@@ -166,12 +200,14 @@ fn export(
     out_dir: &Path,
     incremental: bool,
     crate_filter: Option<&str>,
+    granularity: mcp_docs_core::Granularity,
 ) -> anyhow::Result<()> {
     let opts = mcp_docs_core::BuildOptions {
         write_markdown: true,
         incremental,
         persist: true,
         crate_filter: crate_filter.map(str::to_string),
+        granularity,
     };
     let report = mcp_docs_core::build(doc_dir, out_dir, &opts)?;
 
@@ -202,6 +238,7 @@ fn run_search(
     out_dir: &Path,
     query: &str,
     limit: usize,
+    offset: usize,
     mode: ModeArg,
     crate_name: Option<&str>,
     kind: Option<&str>,
@@ -218,6 +255,7 @@ fn run_search(
 
     let mut search = mcp_docs_core::SearchQuery::new(query);
     search.limit = limit;
+    search.offset = offset;
     search.mode = match mode {
         ModeArg::Substring => mcp_docs_core::MatchMode::Substring,
         ModeArg::Prefix => mcp_docs_core::MatchMode::Prefix,

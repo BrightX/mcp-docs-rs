@@ -2,6 +2,7 @@
 //!
 //! 本 crate 为纯同步库（不含 async），CLI 与 MCP server 均基于它构建。
 
+mod allpage;
 mod cache;
 mod discover;
 mod error;
@@ -14,6 +15,7 @@ mod search;
 mod sidebar;
 mod store;
 
+pub use allpage::parse_all_str;
 pub use cache::{
     fingerprint_doc_root, is_stale, path_mtime, read_meta, write_meta, DocCache, Fingerprint, Meta,
 };
@@ -23,13 +25,13 @@ pub use index::{build, build_index, load_index, write_index, BuildOptions, Build
 pub use link::{html_to_md_relpath, resolve_href, Resolved};
 pub use markdown::{render_item, render_member_item, rewrite_links, LinkStyle, RenderOptions};
 pub use model::{
-    CrateSummary, DiscoveredItem, DocItem, Index, ItemId, ItemKind, ItemSummary, Section,
-    SourceRef, INDEX_SCHEMA_VERSION,
+    CrateSummary, DiscoveredItem, DocItem, Granularity, Index, ItemId, ItemKind, ItemSummary,
+    Section, SourceRef, INDEX_SCHEMA_VERSION,
 };
 pub use parse::{
     parse_item_html, parse_one_line, parse_rustdoc_meta, path_to_identity, ParseOptions,
 };
-pub use search::{search, MatchMode, SearchHit, SearchQuery};
+pub use search::{search, search_page, MatchMode, SearchHit, SearchOutcome, SearchQuery};
 pub use sidebar::{parse_sidebar_file, parse_sidebar_str};
 pub use store::{atomic_write, encode_fs_name, item_output_path, member_output_path};
 

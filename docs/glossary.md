@@ -38,7 +38,7 @@
 |---|---|---|---|
 | #2.1 | `sidebar-items.js` | 每个模块目录一份的纯 JSON 条目清单，建索引入口 | `crates/mcp-docs-core/src/sidebar.rs` |
 | #2.2 | `crates.js` | crate 列表（`window.ALL_CRATES`） | `crates/mcp-docs-core/src/discover.rs::list_crates` |
-| #2.3 | `all.html` | 全部条目的扁平清单页，发现兜底与交叉校验 | `discover.rs`（规划，M6 按需增强） |
+| #2.3 | `all.html` | 全部条目的扁平清单页，发现阶段的交叉校验兜底 | `allpage.rs::parse_all_str` |
 | #2.4 | 签名、item-decl | `<pre class="rust item-decl">` 里的条目声明 | `parse.rs` → `DocItem::signature` |
 | #2.5 | docblock | 文档正文区块；主文档在 `details.toggle.top-doc` 内 | `parse.rs::docblock_to_md` |
 | #2.6 | 噪声区块 | `#synthetic-implementations` / `#blanket-implementations`，默认剥离 | `parse.rs::ParseOptions` / `is_noise_section` |
@@ -46,6 +46,7 @@
 | #2.8 | 实测事实底座 | design.md 中经真实产物核对的结构事实 | `design.md` §1 |
 | #2.9 | `rustdoc-vars` | 页面头部 meta，含 `data-current-crate` / `data-rustdoc-version` | `parse.rs::parse_rustdoc_meta` |
 | #2.10 | 宏条目二元组 | rustdoc 1.98+ 在 sidebar 里把宏写成 `[名字, 标志]` | `sidebar.rs::sidebar_entry_name`（见 `lessons.md` #1.24） |
+| #2.11 | 导出粒度、Granularity | 成员是否单独落盘（`member` 默认 / `item` 仅内联） | `model.rs::Granularity`；`index.rs::BuildOptions` |
 
 ## 3. 代码位置对照
 
@@ -69,3 +70,5 @@
 | #3.16 | 源码位置、source | 条目对应的源码文件与行号 | `parse.rs::parse_source_href`；MCP `get_item_source` |
 | #3.17 | 条目查找、find_summary | 按 id 找条目（精确优先，允许省略类型标记） | `server.rs::find_summary` |
 | #3.18 | 一行摘要、one_line | 索引里的简要描述，仅在有真实文档时生成 | `index.rs`（见 `lessons.md` #1.25） |
+| #3.19 | 分页、offset | 检索 / 列表跳过的命中数；`total` 为分页前总数 | `search.rs::SearchQuery::offset`、`search_page` |
+| #3.20 | allpage 模块 | 解析 `all.html`，补全 sidebar 遗漏的条目 | `crates/mcp-docs-core/src/allpage.rs` |

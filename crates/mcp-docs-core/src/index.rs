@@ -8,7 +8,7 @@ use crate::cache::{fingerprint_doc_root, path_mtime, write_meta, Meta};
 use crate::discover;
 use crate::error::Result;
 use crate::markdown::{render_item, render_member_item, rewrite_links, LinkStyle, RenderOptions};
-use crate::model::{CrateSummary, Index, ItemSummary, INDEX_SCHEMA_VERSION};
+use crate::model::{CrateSummary, Granularity, Index, ItemSummary, INDEX_SCHEMA_VERSION};
 use crate::parse::{self, ParseOptions};
 use crate::store::{atomic_write, item_output_path, member_output_path};
 
@@ -23,6 +23,8 @@ pub struct BuildOptions {
     pub persist: bool,
     /// 只处理指定 crate。
     pub crate_filter: Option<String>,
+    /// 导出粒度：控制成员是否单独落盘。
+    pub granularity: Granularity,
 }
 
 /// 构建结果。
@@ -52,8 +54,15 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
     let render_opts = RenderOptions::default();
 
     // 增量：读取上次索引，用于复用未变化条目。
+    // 仅在 schema 与导出粒度都一致时才复用，否则按当前选项全量重建
+    // （切换粒度会改变成员的 `file`，且不会补写/删除成员文件）。
     let previous = if opts.incremental {
-        load_index(&out_root.join("index.json")).ok()
+        load_index(&out_root.join("index.json"))
+            .ok()
+            .filter(|index| {
+                index.schema_version == INDEX_SCHEMA_VERSION
+                    && index.granularity == opts.granularity
+            })
     } else {
         None
     };
@@ -165,13 +174,24 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
             item_count += 1;
 
             for member in &item.members {
-                if opts.write_markdown {
+                // 成员文件仅在「成员粒度」下写出；条目粒度时只内联在父文件里。
+                if opts.write_markdown && opts.granularity == Granularity::Member {
                     let markdown = render_member_item(member, &render_opts);
                     let path =
                         member_output_path(out_root, &entry.html_path, member.kind, &member.name);
                     atomic_write(&path, markdown.as_bytes())?;
                     written += 1;
                 }
+                // 条目粒度下成员没有独立文件，`file` 指向父条目文件。
+                let file = match opts.granularity {
+                    Granularity::Member => rel_string(
+                        out_root,
+                        &member_output_path(out_root, &entry.html_path, member.kind, &member.name),
+                    ),
+                    Granularity::Item => {
+                        rel_string(out_root, &item_output_path(out_root, &entry.html_path))
+                    }
+                };
                 items.push(ItemSummary {
                     id: member.id.clone(),
                     kind: member.kind,
@@ -183,10 +203,7 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
                     ),
                     has_docs: member.docs_md.is_some(),
                     has_members: false,
-                    file: rel_string(
-                        out_root,
-                        &member_output_path(out_root, &entry.html_path, member.kind, &member.name),
-                    ),
+                    file,
                     html_path: rel_string(doc_root, &entry.html_path),
                     parent_id: Some(item.id.0.clone()),
                     src_mtime: mtime,
@@ -207,6 +224,7 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
         rustdoc_version,
         generated_at: unix_now(),
         target_doc: doc_root.to_string_lossy().into_owned(),
+        granularity: opts.granularity,
         crates,
         items,
     };

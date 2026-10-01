@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use crate::model::{DiscoveredItem, ItemId, ItemKind};
@@ -37,6 +37,19 @@ pub fn discover_crate(doc_root: &Path, crate_name: &str) -> Result<Vec<Discovere
         &[crate_name.to_string()],
         &mut out,
     )?;
+
+    // 兜底：all.html 交叉校验，补全 sidebar 与目录扫描都遗漏的条目
+    // （例如 sidebar 未列出的子模块，扫描不会下钻进去）。
+    if let Ok(html) = fs::read_to_string(doc_root.join(crate_name).join("all.html")) {
+        // 按 HTML 路径去重（re-export 别名下比按 id 去重更稳），只追加缺失项。
+        let mut seen: HashSet<PathBuf> = out.iter().map(|item| item.html_path.clone()).collect();
+        for item in crate::allpage::parse_all_str(&html, crate_name) {
+            if doc_root.join(&item.html_path).is_file() && seen.insert(item.html_path.clone()) {
+                out.push(item);
+            }
+        }
+    }
+
     Ok(out)
 }
 

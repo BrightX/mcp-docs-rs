@@ -4,7 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use mcp_docs_core::{build, fingerprint_doc_root, is_stale, BuildOptions, DocCache, ParseOptions};
+use mcp_docs_core::{
+    build, fingerprint_doc_root, is_stale, BuildOptions, DocCache, Granularity, ParseOptions,
+};
 
 /// fixture 根目录，等价于一个 `target/doc`。
 fn fixture_root() -> PathBuf {
@@ -102,6 +104,60 @@ fn only_changed_page_is_reparsed() {
     let report = build(&doc, &out, &incremental).unwrap();
     assert_eq!(report.parsed, 1, "应只重新解析被改动的页面");
     assert!(report.reused > 0);
+}
+
+#[test]
+fn granularity_item_skips_member_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("out");
+    let opts = BuildOptions {
+        write_markdown: true,
+        persist: true,
+        granularity: Granularity::Item,
+        ..Default::default()
+    };
+    let report = build(&fixture_root(), &out, &opts).unwrap();
+
+    // 只写顶层条目文件，成员不落盘。
+    let tops = report
+        .index
+        .items
+        .iter()
+        .filter(|item| !item.kind.is_member())
+        .count();
+    assert_eq!(report.written, tops);
+    assert!(!out.join("doc_probe/struct.Demo.method.new.md").exists());
+
+    // 成员摘要的 `file` 指向父条目文件。
+    let member = report
+        .index
+        .items
+        .iter()
+        .find(|item| item.id.0 == "doc_probe::struct.Demo::method.new")
+        .unwrap();
+    assert_eq!(member.file, "doc_probe/struct.Demo.md");
+}
+
+#[test]
+fn granularity_change_forces_full_rebuild() {
+    let tmp = tempfile::tempdir().unwrap();
+    let doc = tmp.path().join("doc");
+    let out = tmp.path().join("out");
+    copy_dir(&fixture_root(), &doc);
+
+    // 先按默认（member）粒度建索引并落盘。
+    build(&doc, &out, &full(true)).unwrap();
+
+    // 切换到 item 粒度 + 增量：粒度不一致，应全量重建、零复用。
+    let opts = BuildOptions {
+        persist: true,
+        incremental: true,
+        granularity: Granularity::Item,
+        ..Default::default()
+    };
+    let report = build(&doc, &out, &opts).unwrap();
+    assert_eq!(report.reused, 0);
+    assert_eq!(report.index.granularity, Granularity::Item);
 }
 
 #[test]

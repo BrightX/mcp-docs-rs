@@ -27,6 +27,8 @@ pub struct SearchQuery {
     pub crate_name: Option<String>,
     /// 返回上限。
     pub limit: usize,
+    /// 跳过的命中数（分页）。
+    pub offset: usize,
 }
 
 impl SearchQuery {
@@ -38,6 +40,7 @@ impl SearchQuery {
             kinds: Vec::new(),
             crate_name: None,
             limit: 20,
+            offset: 0,
         }
     }
 }
@@ -51,8 +54,34 @@ pub struct SearchHit {
     pub score: i32,
 }
 
-/// 在索引中检索。
+/// 分页后的检索结果。
+#[derive(Debug, Clone)]
+pub struct SearchOutcome {
+    /// 分页前的命中总数。
+    pub total: usize,
+    /// 当前页的命中。
+    pub hits: Vec<SearchHit>,
+}
+
+/// 在索引中检索，返回当前页（考虑 `limit` / `offset`）。
 pub fn search(index: &Index, query: &SearchQuery) -> Vec<SearchHit> {
+    search_page(index, query).hits
+}
+
+/// 在索引中检索，返回命中总数与当前页。
+pub fn search_page(index: &Index, query: &SearchQuery) -> SearchOutcome {
+    let all = ranked_hits(index, query);
+    let total = all.len();
+    let hits = all
+        .into_iter()
+        .skip(query.offset)
+        .take(query.limit)
+        .collect();
+    SearchOutcome { total, hits }
+}
+
+/// 计算全部命中并排序（未分页）。
+fn ranked_hits(index: &Index, query: &SearchQuery) -> Vec<SearchHit> {
     let needle = query.query.trim().to_lowercase();
     if needle.is_empty() {
         return Vec::new();
@@ -76,7 +105,6 @@ pub fn search(index: &Index, query: &SearchQuery) -> Vec<SearchHit> {
             .then_with(|| a.item.name.len().cmp(&b.item.name.len()))
             .then_with(|| a.item.id.0.cmp(&b.item.id.0))
     });
-    hits.truncate(query.limit);
     hits
 }
 

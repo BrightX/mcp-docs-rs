@@ -18,8 +18,8 @@ use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, S
 
 use mcp_docs_core::MatchMode;
 use mcp_docs_core::{
-    build, is_stale, load_index, render_item, render_member_item, search, BuildOptions, DocCache,
-    DocItem, Index, ItemKind, ItemSummary, ParseOptions, RenderOptions, SearchQuery,
+    build, is_stale, load_index, render_item, render_member_item, search_page, BuildOptions,
+    DocCache, DocItem, Index, ItemKind, ItemSummary, ParseOptions, RenderOptions, SearchQuery,
 };
 
 /// `list_items` 的参数。
@@ -34,6 +34,8 @@ struct ListItemsParams {
     kind: Option<String>,
     /// 返回上限，默认 100。
     limit: Option<usize>,
+    /// 跳过的条目数，默认 0。
+    offset: Option<usize>,
 }
 
 /// `search_items` 的参数。
@@ -50,6 +52,8 @@ struct SearchItemsParams {
     mode: Option<String>,
     /// 返回上限，默认 20。
     limit: Option<usize>,
+    /// 跳过的命中数，默认 0。
+    offset: Option<usize>,
 }
 
 /// `get_item` / `get_item_source` 的参数。
@@ -144,14 +148,17 @@ impl DocsServer {
             .collect();
 
         let limit = params.limit.unwrap_or(100);
+        let offset = params.offset.unwrap_or(0);
         let items: Vec<serde_json::Value> = filtered
             .iter()
+            .skip(offset)
             .take(limit)
             .map(|item| summary_json(item))
             .collect();
 
         Ok(to_json(&serde_json::json!({
             "total": filtered.len(),
+            "offset": offset,
             "returned": items.len(),
             "items": items,
         })))
@@ -167,6 +174,7 @@ impl DocsServer {
         let mut query = SearchQuery::new(params.query);
         query.crate_name = params.crate_name;
         query.limit = params.limit.unwrap_or(20);
+        query.offset = params.offset.unwrap_or(0);
         query.mode = match params.mode.as_deref() {
             Some("prefix") => MatchMode::Prefix,
             Some("fuzzy") => MatchMode::Fuzzy,
@@ -176,8 +184,9 @@ impl DocsServer {
             query.kinds.push(kind);
         }
 
-        let hits = search(&index, &query);
-        let items: Vec<serde_json::Value> = hits
+        let outcome = search_page(&index, &query);
+        let items: Vec<serde_json::Value> = outcome
+            .hits
             .iter()
             .map(|hit| {
                 let mut value = summary_json(&hit.item);
@@ -186,9 +195,12 @@ impl DocsServer {
             })
             .collect();
 
-        Ok(to_json(
-            &serde_json::json!({ "returned": items.len(), "hits": items }),
-        ))
+        Ok(to_json(&serde_json::json!({
+            "total": outcome.total,
+            "offset": query.offset,
+            "returned": items.len(),
+            "hits": items,
+        })))
     }
 
     /// 读取条目的完整 markdown。
@@ -470,16 +482,12 @@ fn matches_module(item: &ItemSummary, module: Option<&str>) -> bool {
 /// 先精确匹配（含类型标记，如 `tokio::task::fn.spawn`）；未命中时退化为
 /// 省略类型标记的写法（`tokio::task::spawn`），与资源读取保持一致。
 fn find_summary<'a>(index: &'a Index, id: &str) -> Option<&'a ItemSummary> {
-    index
-        .items
-        .iter()
-        .find(|item| item.id.0 == id)
-        .or_else(|| {
-            index
-                .items
-                .iter()
-                .find(|item| strip_kind_tags(&item.id.0) == id)
-        })
+    index.items.iter().find(|item| item.id.0 == id).or_else(|| {
+        index
+            .items
+            .iter()
+            .find(|item| strip_kind_tags(&item.id.0) == id)
+    })
 }
 
 /// 去掉 id 各段里的类型标记：`rmcp::attr.tool_router` → `rmcp::tool_router`。

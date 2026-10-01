@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use mcp_docs_core::{build_index, search, Index, MatchMode, SearchQuery};
+use mcp_docs_core::{build_index, search, search_page, Index, MatchMode, SearchQuery};
 
 /// fixture 根目录，等价于一个 `target/doc`。
 fn fixture_root() -> PathBuf {
@@ -108,4 +108,62 @@ fn index_json_roundtrips() {
     let json = serde_json::to_string(&index).unwrap();
     let restored: Index = serde_json::from_str(&json).unwrap();
     assert_eq!(index, restored);
+}
+
+/// 查询词 `e` 的命中 id 列表（不截断）。
+fn all_hits() -> Vec<String> {
+    let index = build();
+    let mut query = SearchQuery::new("e");
+    query.limit = 1000;
+    search(&index, &query)
+        .iter()
+        .map(|hit| hit.item.id.0.clone())
+        .collect()
+}
+
+#[test]
+fn search_page_total_is_pre_pagination() {
+    let index = build();
+    let total = all_hits().len();
+    assert!(total >= 3, "需要足够多的命中来测试分页");
+
+    let mut query = SearchQuery::new("e");
+    query.limit = 2;
+    query.offset = 1;
+    let outcome = search_page(&index, &query);
+    assert_eq!(outcome.total, total, "total 应为分页前的命中总数");
+    assert_eq!(outcome.hits.len(), 2);
+}
+
+#[test]
+fn offset_paginates_without_overlap() {
+    let index = build();
+    let full = all_hits();
+
+    let page = |offset: usize, limit: usize| {
+        let mut query = SearchQuery::new("e");
+        query.offset = offset;
+        query.limit = limit;
+        search(&index, &query)
+            .iter()
+            .map(|hit| hit.item.id.0.clone())
+            .collect::<Vec<_>>()
+    };
+
+    let mut paged = page(0, 2);
+    paged.extend(page(2, 2));
+    assert_eq!(paged, full[..4].to_vec(), "分页应与整体结果一致且无重叠");
+}
+
+#[test]
+fn offset_past_end_and_zero_limit_are_empty() {
+    let index = build();
+
+    let mut past = SearchQuery::new("e");
+    past.offset = 9999;
+    assert!(search(&index, &past).is_empty());
+
+    let mut zero = SearchQuery::new("e");
+    zero.limit = 0;
+    assert!(search(&index, &zero).is_empty());
 }

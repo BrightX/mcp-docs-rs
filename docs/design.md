@@ -188,7 +188,7 @@ pub fn rank(item: &ItemSummary, q: &str) -> i32;   // 精确名 > 前缀 > path 
 1. `list_crates`：读 `crates.js` 解析数组；用目录存在性过滤；排除 `src/`、`static.files/`、`trait.impl/`。
 2. `discover_crate`：从 `doc_root/<crate>` 起递归 `walk_module`；每层读 `sidebar-items.js`，`mod` 项下钻子目录，其余按 `{file_prefix}.{name}.html` 产出 `DiscoveredItem{ id = crate::mod::…::name }`。文件缺失记 warning，不 panic。
 3. 兜底：sidebar 缺失时扫描目录下 `^(struct|enum|trait|fn|type|constant|static|macro|union|primitive)\.(.+)\.html$`。
-4. 交叉校验：解析 `all.html` 的 `ul.all-items li a` 补全缺失项。
+4. 交叉校验兜底（`allpage.rs`）：解析 `all.html` 的 `ul.all-items a`，把 sidebar 与目录扫描都遗漏的条目按 **`html_path` 去重**后**追加**（保持发现顺序）。`foo!.html` 规整为真实文件 `foo.html`；外链、绝对路径、逃出 crate 的 `..` 跳过。
 
 > 用 sidebar 而非只靠 all.html 的原因：sidebar 与目录树同构，能直接确定「这个 html 属于哪个模块」；all.html 的显示路径是 `inner::Nested` 字符串，仍需拆分。两者互补。
 
@@ -263,29 +263,38 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 - `encode_fs_name()`：清洗 `< > : " / \ | ? *` → `_`；Windows 保留名（`CON/PRN/AUX/NUL/COM1…`）加 `_` 前缀；去尾部 `.` / 空格；泛型名（`Foo<Bar>`）超 200 字节时 `name-hash8` 截断；冲突时加成员 kind 前缀兜底。
 - 写盘一律 `tmp → rename` 原子替换，避免 Agent 读到半截文件。
 
+**导出粒度（`Granularity`）**
+
+- `member`（默认）：每个成员额外写独立文件；成员摘要的 `file` 指向该文件。
+- `item`：只写顶层条目文件，成员仅内联在父文件里；成员摘要的 `file` **指向父条目文件**（当前 `ItemSummary` 无 `anchor` 字段，不做深链）。
+- 索引记录 `granularity`；增量构建在 schema 或粒度变化时全量重建（否则会复用 `file` 不一致的旧摘要，且不补写成员文件）。
+
 **index.json 契约示例**
 
 ```json
 {
-  "schema_version": 1,
-  "rustdoc_version": "1.95.0 (59807616e 2026-04-14)",
-  "generated_at": "2026-09-30T12:00:00Z",
-  "target_doc": "D:\\...\\target\\doc",
-  "fingerprint": { "file_count": 9, "max_mtime": 1759..., "size_sum": 82736, "crates_js_hash": "ab12…" },
-  "crates": [{ "name": "doc_probe", "version": "0.1.0", "item_count": 6 }],
+  "schema_version": 5,
+  "rustdoc_version": "1.98.1 (48a229cea 2026-09-01)",
+  "generated_at": 1790853560,
+  "target_doc": "D:\\RustProjects\\mcp-docs-rs\\target\\doc",
+  "granularity": "member",
+  "crates": [{ "name": "doc_probe", "version": null, "item_count": 11 }],
   "items": [
-    { "id": "doc_probe::Demo", "kind": "struct", "name": "Demo",
+    { "id": "doc_probe::struct.Demo", "kind": "struct", "name": "Demo",
       "path": ["doc_probe"], "one_line": "A demo struct.", "has_docs": true,
-      "has_members": true, "file": "doc_probe/struct.Demo.md", "anchor": null,
-      "source": "lib.rs:10-13" },
-    { "id": "doc_probe::Demo::new", "kind": "method", "name": "new",
+      "has_members": true, "file": "doc_probe/struct.Demo.md",
+      "html_path": "doc_probe/struct.Demo.html", "parent_id": null, "src_mtime": 1790853560614 },
+    { "id": "doc_probe::struct.Demo::method.new", "kind": "method", "name": "new",
       "path": ["doc_probe", "Demo"], "one_line": "build a demo",
       "has_docs": true, "has_members": false,
-      "file": "doc_probe/struct.Demo.new.md", "anchor": "method.new",
-      "source": "lib.rs:17" }
+      "file": "doc_probe/struct.Demo.method.new.md",
+      "html_path": "doc_probe/struct.Demo.html", "parent_id": "doc_probe::struct.Demo",
+      "src_mtime": 1790853560614 }
   ]
 }
 ```
+
+> 产物指纹与 schema 版本另存于 `meta.json`（判定重建时无需反序列化大 index）。
 
 ## 7. 缓存策略
 
@@ -304,11 +313,13 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 | 工具 | 入参 | 返回 |
 |---|---|---|
 | `list_crates` | — | `{ crates: [{name, version, item_count}] }` |
-| `list_items` | `{crate?, module?, kinds?, limit?=100, offset?=0}` | `{ total, items: [ItemSummary] }` |
-| `search_items` | `{query, crate?, kinds?, mode?="substring"\|"prefix"\|"fuzzy", limit?=20}` | `{ hits: [{id,kind,name,path,one_line,file,anchor,snippet,score}] }` |
-| `get_item` | `{id, format?="markdown"\|"json", include_members?=true, max_bytes?}` | 该条目完整 markdown（签名 + 主文档 + 各 section + 成员） |
-| `get_item_source` | `{id}` | `{file, line_start, line_end}` |
-| `rebuild_index` | `{force?}` | `{rebuilt, fingerprint, crate_count, item_count}` |
+| `list_items` | `{crate?, module?, kind?, limit?=100, offset?=0}` | `{ total, offset, returned, items: [ItemSummary] }` |
+| `search_items` | `{query, crate?, kind?, mode?="substring"\|"prefix"\|"fuzzy", limit?=20, offset?=0}` | `{ total, offset, returned, hits: [{…ItemSummary, score}] }` |
+| `get_item` | `{id, max_bytes?}` | 该条目完整 markdown（签名 + 主文档 + 各 section + 成员） |
+| `get_item_source` | `{id}` | `{id, source: {file, path, line_start, line_end}}` |
+| `rebuild_index` | `{force?}` | `{rebuilt, reused, item_count}` |
+
+> `total` 为分页前的命中数；`id` 允许省略类型标记（如 `tokio::task::spawn`）。
 
 ### 资源
 
@@ -327,10 +338,10 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 ## 9. CLI
 
 ```
-mcp-docs export [--out DIR] [--doc-dir target/doc] [--incremental]   # 全量导出 md + index.json
+mcp-docs export [--out DIR] [--doc-dir target/doc] [--incremental] [--granularity member|item]  # 导出 md + index.json
 mcp-docs tree   [--doc-dir target/doc]                               # 打印条目树（调试）
 mcp-docs show   <id> [--doc-dir target/doc]                          # 打印单条目 markdown
-mcp-docs search <query> [--crate X] [--limit N]                      # 检索
+mcp-docs search <query> [--crate X] [--limit N] [--offset N]         # 检索（可分页）
 ```
 
 ## 10. 测试策略

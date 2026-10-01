@@ -184,7 +184,11 @@
 
 ## 3. 索引、缓存与增量
 
-（暂无条目）
+### #3.1 切换导出粒度必须让增量失效
+
+**错**：`build` 增量时只要 `index.json` 存在就复用它。
+**对**：导出粒度（`member` / `item`）会改变成员摘要的 `file`（指向成员文件还是父文件），而增量复用是**整条复用旧的 `ItemSummary`**；切换粒度后复用旧索引会得到与当前产物不一致的 `file`，且 `item→member` 方向不会补写成员文件。修复：加载旧索引时校验 `schema_version` 与 `granularity`，任一不符即全量重建。顺带修掉了「CLI `--incremental` 从不校验 schema」的隐患（此前只有 server 的 `is_stale` 校验）。
+**相关**：`index.rs::build`（增量守卫）、`model.rs::Granularity`
 
 ## 4. MCP 接口
 

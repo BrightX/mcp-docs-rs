@@ -291,6 +291,22 @@ pub struct CrateSummary {
     pub item_count: usize,
 }
 
+/// 导出粒度：控制成员条目是否单独落盘。
+///
+/// - `Member`（默认）：每个成员额外写一个独立 md 文件；成员摘要的 `file`
+///   指向该文件。
+/// - `Item`：只写顶层条目文件，成员仅内联在父文件里；成员摘要的 `file`
+///   指向父文件。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Granularity {
+    /// 成员单独落盘。
+    #[default]
+    Member,
+    /// 仅顶层条目落盘，成员只内联。
+    Item,
+}
+
 /// 全量索引。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Index {
@@ -302,6 +318,9 @@ pub struct Index {
     pub generated_at: u64,
     /// 产物根目录。
     pub target_doc: String,
+    /// 条目成员是否单独落盘（`member` / `item`）。
+    #[serde(default)]
+    pub granularity: Granularity,
     /// crate 列表。
     pub crates: Vec<CrateSummary>,
     /// 全部条目（扁平）。
@@ -316,4 +335,5 @@ pub struct Index {
 /// - 2：条目 id 改为带类型标记（`serde::trait.Deserialize`），并新增 `parent_id`。
 /// - 3：`one_line` 摘要里的链接重写为 `.md`，源码路径归一化为相对 `doc_root`。
 /// - 4：无真实文档的条目不再返回 rustdoc 占位摘要。
-pub const INDEX_SCHEMA_VERSION: u32 = 4;
+/// - 5：新增导出粒度 `granularity`；发现阶段启用 `all.html` 交叉校验兜底。
+pub const INDEX_SCHEMA_VERSION: u32 = 5;
