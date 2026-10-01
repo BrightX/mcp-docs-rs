@@ -15,11 +15,13 @@ use rmcp::model::{
 use rmcp::schemars::{self, JsonSchema};
 use rmcp::service::RequestContext;
 use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler};
+use tokio::sync::watch;
 
 use mcp_docs_core::MatchMode;
 use mcp_docs_core::{
     build, is_stale, load_index, render_item, render_member_item, search_page, BuildOptions,
-    DocCache, DocItem, Index, ItemKind, ItemSummary, ParseOptions, RenderOptions, SearchQuery,
+    DocCache, DocItem, Granularity, Index, ItemKind, ItemSummary, ParseOptions, RenderOptions,
+    SearchQuery, INDEX_SCHEMA_VERSION,
 };
 
 /// `list_items` 的参数。
@@ -80,18 +82,89 @@ pub struct DocsServer {
     out_dir: Arc<PathBuf>,
     index: Arc<RwLock<Index>>,
     cache: Arc<DocCache>,
+    /// 索引就绪信号：后台加载/重建完成时置 `true`。
+    ready: watch::Receiver<bool>,
 }
 
 impl DocsServer {
-    /// 构建服务：加载已有索引，缺失或过期时重建。
+    /// 构建服务：**不在启动阶段阻塞**。
+    ///
+    /// 同步加载已有索引（毫秒~亚秒级）即可立即服务；索引的过期判定与重建
+    /// 放到后台任务，避免冷启动（首次全量构建可能需 1~2 分钟）拖住
+    /// `initialize`。没有可用索引时用空占位，工具/资源会等待构建完成
+    /// （见 `ensure_ready`）。
     pub fn new(doc_dir: PathBuf, out_dir: PathBuf) -> anyhow::Result<Self> {
-        let index = load_or_build(&doc_dir, &out_dir)?;
-        Ok(Self {
-            doc_dir: Arc::new(doc_dir),
-            out_dir: Arc::new(out_dir),
-            index: Arc::new(RwLock::new(index)),
+        let doc_dir = Arc::new(doc_dir);
+        let out_dir = Arc::new(out_dir);
+
+        let loaded = load_index(&out_dir.join("index.json")).ok();
+        let has_index = loaded.is_some();
+        let initial = loaded.unwrap_or_else(|| empty_index(&doc_dir));
+        let (ready_tx, ready) = watch::channel(has_index);
+
+        let server = Self {
+            doc_dir,
+            out_dir,
+            index: Arc::new(RwLock::new(initial)),
             cache: Arc::new(DocCache::new()),
+            ready,
+        };
+
+        // 后台刷新索引；无论成功与否都要置位就绪，避免调用方永久等待。
+        let worker = server.clone();
+        tokio::spawn(async move {
+            if let Err(err) = worker.refresh_index(!has_index).await {
+                eprintln!("后台构建索引失败：{err:#}");
+            }
+            let _ = ready_tx.send(true);
+        });
+
+        Ok(server)
+    }
+
+    /// 等待索引就绪；已就绪时立即返回。
+    async fn ensure_ready(&self) {
+        let mut ready = self.ready.clone();
+        loop {
+            let is_ready = *ready.borrow();
+            if is_ready {
+                return;
+            }
+            if ready.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
+    /// 后台刷新索引：缺失（`force`）或过期时全量重建，随后替换内存索引。
+    async fn refresh_index(&self, force: bool) -> anyhow::Result<()> {
+        let meta_path = self.out_dir.join("meta.json");
+        if !force && !is_stale(&self.doc_dir, &meta_path)? {
+            return Ok(());
+        }
+
+        let doc_dir = self.doc_dir.clone();
+        let out_dir = self.out_dir.clone();
+        // 解析/渲染是 CPU 密集的，放到阻塞线程池，别占着 async 执行器。
+        let index = tokio::task::spawn_blocking(move || {
+            build(
+                &doc_dir,
+                &out_dir,
+                &BuildOptions {
+                    persist: true,
+                    ..Default::default()
+                },
+            )
+            .map(|report| report.index)
         })
+        .await??;
+
+        self.cache.invalidate();
+        *self
+            .index
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = index;
+        Ok(())
     }
 
     /// 只读访问索引。
@@ -114,7 +187,8 @@ impl DocsServer {
 impl DocsServer {
     /// 列出已索引的 crate。
     #[tool(description = "列出已索引的 crate 及其条目数")]
-    fn list_crates(&self) -> String {
+    async fn list_crates(&self) -> String {
+        self.ensure_ready().await;
         let index = self.index();
         let crates: Vec<serde_json::Value> = index
             .crates
@@ -132,10 +206,11 @@ impl DocsServer {
 
     /// 列出条目摘要（不含正文）。
     #[tool(description = "列出条目摘要（可按 crate / 模块 / 类型过滤），不含正文")]
-    fn list_items(
+    async fn list_items(
         &self,
         Parameters(params): Parameters<ListItemsParams>,
     ) -> Result<String, String> {
+        self.ensure_ready().await;
         let index = self.index();
         let kind = params.kind.as_deref().map(parse_kind).transpose()?;
 
@@ -166,10 +241,11 @@ impl DocsServer {
 
     /// 检索条目。
     #[tool(description = "按名字 / 路径 / 摘要检索条目，返回轻量摘要与得分")]
-    fn search_items(
+    async fn search_items(
         &self,
         Parameters(params): Parameters<SearchItemsParams>,
     ) -> Result<String, String> {
+        self.ensure_ready().await;
         let index = self.index();
         let mut query = SearchQuery::new(params.query);
         query.crate_name = params.crate_name;
@@ -205,7 +281,8 @@ impl DocsServer {
 
     /// 读取条目的完整 markdown。
     #[tool(description = "读取某个条目的完整 markdown 文档（签名 + 文档 + 成员）")]
-    fn get_item(&self, Parameters(params): Parameters<ItemParams>) -> Result<String, String> {
+    async fn get_item(&self, Parameters(params): Parameters<ItemParams>) -> Result<String, String> {
+        self.ensure_ready().await;
         let index = self.index();
         let summary = find_summary(&index, &params.id)
             .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
@@ -226,10 +303,11 @@ impl DocsServer {
 
     /// 查询条目的源码位置。
     #[tool(description = "查询条目对应的源码文件与行号")]
-    fn get_item_source(
+    async fn get_item_source(
         &self,
         Parameters(params): Parameters<ItemParams>,
     ) -> Result<String, String> {
+        self.ensure_ready().await;
         let index = self.index();
         let summary = find_summary(&index, &params.id)
             .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
@@ -253,16 +331,22 @@ impl DocsServer {
 
     /// 重建索引。
     #[tool(description = "重新扫描产物目录并重建索引（默认增量）")]
-    fn rebuild_index(
+    async fn rebuild_index(
         &self,
         Parameters(params): Parameters<RebuildParams>,
     ) -> Result<String, String> {
+        self.ensure_ready().await;
+
         let options = BuildOptions {
             persist: true,
             incremental: !params.force.unwrap_or(false),
             ..Default::default()
         };
-        let report = build(&self.doc_dir, &self.out_dir, &options)
+        let doc_dir = self.doc_dir.clone();
+        let out_dir = self.out_dir.clone();
+        let report = tokio::task::spawn_blocking(move || build(&doc_dir, &out_dir, &options))
+            .await
+            .map_err(|err| format!("重建任务失败：{err}"))?
             .map_err(|err| format!("重建索引失败：{err}"))?;
 
         self.cache.invalidate();
@@ -299,6 +383,7 @@ impl ServerHandler for DocsServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
+        self.ensure_ready().await;
         let index = self.index();
         let mut resources = vec![
             Resource::new("rustdoc://crates", "crates").with_description("所有已索引的 crate")
@@ -332,7 +417,7 @@ impl ServerHandler for DocsServer {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
-        let text = self.read_uri(&request.uri)?;
+        let text = self.read_uri(&request.uri).await?;
         let contents =
             ResourceContents::text(text, request.uri.clone()).with_mime_type("text/markdown");
         Ok(ReadResourceResult::new(vec![contents]).into())
@@ -341,13 +426,14 @@ impl ServerHandler for DocsServer {
 
 impl DocsServer {
     /// 读取一个 `rustdoc://` URI 对应的文本内容。
-    fn read_uri(&self, uri: &str) -> Result<String, McpError> {
+    async fn read_uri(&self, uri: &str) -> Result<String, McpError> {
+        self.ensure_ready().await;
         let path = uri
             .strip_prefix("rustdoc://")
             .ok_or_else(|| McpError::invalid_params(format!("非 rustdoc URI：{uri}"), None))?;
 
         if path == "crates" {
-            return Ok(self.list_crates());
+            return Ok(self.list_crates().await);
         }
 
         let (crate_name, item) = match path.split_once('/') {
@@ -371,6 +457,7 @@ impl DocsServer {
                     id,
                     max_bytes: None,
                 }))
+                .await
                 .map_err(|message| McpError::invalid_params(message, None))
             }
             // rustdoc://{crate}：该 crate 的条目清单。
@@ -413,26 +500,20 @@ impl DocsServer {
     }
 }
 
-/// 加载已有索引；缺失或过期时重建。
-fn load_or_build(doc_dir: &Path, out_dir: &Path) -> anyhow::Result<Index> {
-    let index_path = out_dir.join("index.json");
-    let meta_path = out_dir.join("meta.json");
-
-    if !is_stale(doc_dir, &meta_path)? {
-        if let Ok(index) = load_index(&index_path) {
-            return Ok(index);
-        }
+/// 尚无可用索引时的空占位。
+///
+/// 只有当 `index.json` 缺失或反序列化失败时才会用到；此时 `ready` 为
+/// `false`，`ensure_ready` 会挡住对它的访问，直到后台构建完成。
+fn empty_index(doc_dir: &Path) -> Index {
+    Index {
+        schema_version: INDEX_SCHEMA_VERSION,
+        rustdoc_version: None,
+        generated_at: 0,
+        target_doc: doc_dir.to_string_lossy().into_owned(),
+        granularity: Granularity::default(),
+        crates: Vec::new(),
+        items: Vec::new(),
     }
-
-    let report = build(
-        doc_dir,
-        out_dir,
-        &BuildOptions {
-            persist: true,
-            ..Default::default()
-        },
-    )?;
-    Ok(report.index)
 }
 
 /// 条目摘要的 JSON 表示。
@@ -521,4 +602,47 @@ fn truncate(text: String, max_bytes: Option<usize>) -> String {
         end -= 1;
     }
     format!("{}\n\n…（内容已按 max_bytes={limit} 截断）", &text[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 冷启动不阻塞：`new` 立即返回（用空占位），后台构建完成后索引可用。
+    #[tokio::test]
+    async fn cold_start_builds_in_background() {
+        let doc_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../mcp-docs-core/tests/fixtures/doc_probe");
+        let out = tempfile::tempdir().unwrap();
+
+        // 全新 out 目录：此时没有索引，构造不应阻塞。
+        let server = DocsServer::new(doc_dir, out.path().to_path_buf()).unwrap();
+
+        // 等待后台就绪后，索引应已填充。
+        server.ensure_ready().await;
+        let index = server.index();
+        assert_eq!(index.crates.len(), 1, "后台应构建出 doc_probe 的索引");
+        assert!(!index.items.is_empty());
+    }
+
+    /// 已有索引时，就绪信号初始即为 true，工具无需等待。
+    #[tokio::test]
+    async fn existing_index_is_ready_immediately() {
+        let doc_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../mcp-docs-core/tests/fixtures/doc_probe");
+        let out = tempfile::tempdir().unwrap();
+        build(
+            &doc_dir,
+            out.path(),
+            &BuildOptions {
+                persist: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let server = DocsServer::new(doc_dir, out.path().to_path_buf()).unwrap();
+        assert!(*server.ready.borrow(), "已有索引时应立即就绪");
+        assert_eq!(server.index().crates.len(), 1);
+    }
 }

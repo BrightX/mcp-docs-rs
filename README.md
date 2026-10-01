@@ -56,6 +56,8 @@ cargo run -p mcp-docs-server -- --doc-dir target/doc --out-dir target/doc-search
 
 资源：`rustdoc://crates`、`rustdoc://{crate}`、`rustdoc://{crate}/{item}`。
 
+冷启动不阻塞：`initialize` 立即返回；首次的索引构建在后台进行，工具/资源会等待就绪后再返回（已有索引则直接服务、后台按需刷新）。
+
 典型流程：`search_items("spawn", crate="tokio")` → `get_item("tokio::spawn")` → 只拿到这一小块。
 
 ## 项目结构

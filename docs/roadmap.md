@@ -12,6 +12,7 @@
 | M5 | MCP Server | ✅ 已完成 |
 | M6 | 打磨与真实规模验证 | ✅ 已完成 |
 | M7 | 遗留特性补齐（分页 / 导出粒度 / all.html 兜底） | ✅ 已完成 |
+| M8 | 冷启动不阻塞 | ✅ 已完成 |
 
 状态标记：⬜ 未开始 / 🟡 进行中 / ✅ 已完成 / ⛔ 阻塞。
 
@@ -135,7 +136,6 @@
 - `--include-auto-impls`（保留 rustdoc 的 synthetic / blanket impl 噪声区块）。
 - 发布形态元数据（crates.io 的 `repository` / `keywords` 等）。
 - 宏生成的内部方法噪声（如 rmcp `#[tool]` 展开的 `list_crates_tool_attr`）：HTML 结构与普通方法同构，无通用可辨识信号，暂不特殊过滤。
-- 服务冷启动重建索引耗时（debug 下约 2 分钟）可能超过 MCP 客户端的初始化超时：可考虑由 CLI 预建索引，或先应答 `initialize` 再后台构建（见 lessons #4.3）。
 
 ## M7 — 遗留特性补齐
 
@@ -149,6 +149,21 @@
 - `search --offset 2 --limit 2` 与整体结果切片一致且无重叠；`offset` 越界 / `limit=0` 返回空；`total` 与分页无关。
 - `export --granularity item` 不写成员文件、`written`==顶层条目数、成员摘要 `file` 指向父文件；切换粒度后增量构建 `reused==0`。
 - `all.html` 能补全 sidebar 遗漏的子模块条目，且不产生重复（fixture 仍为 6 项、顺序不变）。
+
+## M8 — 冷启动不阻塞
+
+**背景**：server 原在启动时同步加载/重建索引，冷启动全量构建（debug 约 2 分钟）会拖住 `initialize`，超过 MCP 客户端的初始化超时（见 lessons #4.3）。
+
+**交付物**
+- `DocsServer::new` 只同步加载已有 `index.json`（毫秒~亚秒级）即开始服务；缺失时用空占位。
+- 过期判定与重建移到后台任务（`refresh_index`），CPU 密集工作走 `spawn_blocking`；构建完成后替换内存索引并清空解析缓存。
+- 工具与资源通过 `watch` 就绪信号等待（`ensure_ready`）：有旧索引则先服务、后台再刷新。
+- `rebuild_index` 同样改为 `spawn_blocking`。
+
+**验收标准**
+- 全新 out 目录（需全量构建）下 `initialize` **11 ms** 返回；工具调用在后台构建完成前保持等待，完成后返回真实数据（fixture 路径下 43 ms 返回 1 个 crate）。
+- 已有索引时初始即就绪、无需等待。
+- 服务端新增 2 个测试覆盖上述两条路径；`cargo test` 全绿、clippy 无警告。
 
 ## 工作约定
 

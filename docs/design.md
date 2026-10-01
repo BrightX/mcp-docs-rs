@@ -304,6 +304,8 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 - **stale 判定**：fingerprint 不等 **或** 页面 `data-rustdoc-version` 变化 **或** `schema_version` 变化 → 重建。默认全量重建索引（很快）；`--incremental` 时按 `src_mtime` 逐文件比对，仅更新变化项。
 - CPU 密集的解析/渲染在 async handler 中用 `tokio::task::spawn_blocking` 包裹。
 
+**启动与就绪（不阻塞 `initialize`）**：server 构造时只同步加载已有 `index.json`（毫秒~亚秒级）即开始服务；索引的过期判定与重建交给后台任务，避免冷启动（首次全量构建可能需 1~2 分钟）拖住 `initialize`。工具与资源在访问索引前等待「就绪」信号（`ensure_ready`）：有旧索引则先服务、后台再刷新；完全没有索引时用空占位并等待构建完成。
+
 ## 8. MCP 接口（rmcp 3.5.0）
 
 设计原则：**先搜后读** —— 搜索工具只返回轻量摘要 + 指针，读取工具才返回正文，避免 Agent 上下文爆炸。
@@ -320,6 +322,7 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 | `rebuild_index` | `{force?}` | `{rebuilt, reused, item_count}` |
 
 > `total` 为分页前的命中数；`id` 允许省略类型标记（如 `tokio::task::spawn`）。
+> 冷启动时 `initialize` 立即返回，工具/资源会等待后台索引就绪后再返回（见 §7）。
 
 ### 资源
 
