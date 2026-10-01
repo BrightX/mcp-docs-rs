@@ -135,6 +135,7 @@
 - `--include-auto-impls`（保留 rustdoc 的 synthetic / blanket impl 噪声区块）。
 - 发布形态元数据（crates.io 的 `repository` / `keywords` 等）。
 - 宏生成的内部方法噪声（如 rmcp `#[tool]` 展开的 `list_crates_tool_attr`）：HTML 结构与普通方法同构，无通用可辨识信号，暂不特殊过滤。
+- 服务冷启动重建索引耗时（debug 下约 2 分钟）可能超过 MCP 客户端的初始化超时：可考虑由 CLI 预建索引，或先应答 `initialize` 再后台构建（见 lessons #4.3）。
 
 ## M7 — 遗留特性补齐
 

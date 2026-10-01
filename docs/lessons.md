@@ -204,6 +204,13 @@
 **对**：条目 id 带类型标记（`tokio::task::fn.spawn`），但工具描述里的示例、以及人的直觉都是省略形式（`tokio::task::spawn`）——两者不一致时 Agent 只会拿到 `未找到条目`。抽出 `find_summary`（精确优先、未中再退化匹配），让 `get_item` / `get_item_source` / 资源读取共用同一逻辑。
 **相关**：`server.rs::find_summary`
 
+### #4.3 MCP Inspector CLI 不转发服务自身的命令行参数
+
+**错**：以为 `inspector --cli <server.exe> --doc-dir X --out-dir Y` 会把 `--doc-dir` / `--out-dir` 传给服务进程。
+**对**：Inspector 把这些 `--xxx` 当作**自己的选项**消费掉（未识别也不报错），服务只拿到可执行文件本身、回落到默认参数。用包装进程实测：服务收到的 argv 只有 `["./target/debug/mcp-docs-server.exe"]`。此前多轮 Inspector 调试"成功"实属巧合——默认参数恰好就是要用的 `target/doc` + `target/doc-search`；`INDEX_SCHEMA_VERSION` 升到 5 后默认目录的旧索引过期，服务**启动时全量重建**（debug 约 2 分钟）→ 超过 Inspector 15s 超时，一度被误判为 Inspector/npx 故障（最小 node stdio MCP 服务 2s 通过即可排除）。
+**规避**：调试前先用默认参数（或服务实际会用的目录）把索引建好；需要非默认目录时改用直接 stdio JSON-RPC 握手。
+**相关**：`crates/mcp-docs-server/src/main.rs`（`--doc-dir` / `--out-dir`）
+
 ## 5. 工程、依赖与工具链
 
 ### #5.1 scraper 0.27 的 `ElementRef` API 与旧版不同
