@@ -315,4 +315,5 @@ pub struct Index {
 ///
 /// - 2：条目 id 改为带类型标记（`serde::trait.Deserialize`），并新增 `parent_id`。
 /// - 3：`one_line` 摘要里的链接重写为 `.md`，源码路径归一化为相对 `doc_root`。
-pub const INDEX_SCHEMA_VERSION: u32 = 3;
+/// - 4：无真实文档的条目不再返回 rustdoc 占位摘要。
+pub const INDEX_SCHEMA_VERSION: u32 = 4;

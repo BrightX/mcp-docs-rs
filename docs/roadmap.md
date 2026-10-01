@@ -120,6 +120,7 @@
 - 在根项目自身（123 crate / 19231 条目）上验证并修复三处缺口：属性宏未被索引（#1.14）、宏重定向页导致构建中断（#1.15）、trait 签名混入折叠控件文本（#1.16）。
 - 增量导出性能：全量 2m52s → 增量 **2.2s**（预建 HashMap 索引，见 lessons #1.18）；条目 id 加类型标记以保证唯一（#1.17、#1.19）。
 - 再次用 MCP Inspector CLI 调试全部 6 个工具与 3 类资源，修复四处缺陷：链接重写对带 title 的链接失效（#1.22）、源码路径未归一化到 `doc_root`（#1.23）、`kind` 过滤器被静默忽略（#4.1）、资源 crate 清单无上限（大 crate 会返回超大 JSON）。
+- 工具链升到 rustdoc **1.98.1** 后再做一次 Inspector 全能力复验，又修复三处问题：宏条目二元组格式导致导出**整体中断**（#1.24）、无文档条目的占位 `one_line`（#1.25）、`get_item` / `get_item_source` 不接受省略类型标记的 id（#4.2）。
 
 **验收标准**（均已达成）
 - 全量导出 5526 个 md 耗时 46 秒；二次增量 1.0 秒（复用 5523）。
@@ -127,11 +128,13 @@
 - `search_items("spawn", crate="tokio")` 命中且无重复；`get_item(..., max_bytes)` 正确截断。
 - MCP 全能力（`tools/list`、6 个 `tools/call`、`resources/list`、`resources/templates/list`、`resources/read`）经 Inspector CLI 复验通过。
 - 真实规模下 MCP stdio 联调通过。
+- rustdoc 1.98.1 下全量导出 18922 条目（114 crate）；Inspector 复验 6 工具 + 3 资源全部通过（含省略类型标记的 id、非法 `kind` 报错、`max_bytes` 截断）。
 
 **未做（记录为按需增强）**
 - `all.html` 交叉校验兜底（`sidebar-items.js` 已能完整覆盖，暂不需要）。
 - 检索分页 `offset`、`--granularity`、`--include-auto-impls`。
 - 发布形态元数据（crates.io 的 `repository` / `keywords` 等）。
+- 宏生成的内部方法噪声（如 rmcp `#[tool]` 展开的 `list_crates_tool_attr`）：HTML 结构与普通方法同构，无通用可辨识信号，暂不特殊过滤。
 
 ## 工作约定
 

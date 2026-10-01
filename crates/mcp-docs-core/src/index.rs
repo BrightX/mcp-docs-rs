@@ -136,17 +136,26 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
                 written += 1;
             }
 
+            // 无真实文档时，rustdoc 生成的 `<meta name="description">` 是占位文本
+            // （如 "API documentation for the Rust `X` struct ..."），不应作为摘要返回。
+            let has_docs = item.docs_md.is_some();
+            let one_line = if has_docs {
+                // 摘要可能含 rustdoc 生成的 markdown 链接，统一重写为 `.md`。
+                rewrite_links(
+                    &parse::parse_one_line(&html).unwrap_or_default(),
+                    LinkStyle::Relative,
+                )
+            } else {
+                String::new()
+            };
+
             items.push(ItemSummary {
                 id: item.id.clone(),
                 kind: item.kind,
                 name: item.name.clone(),
                 path: item.path.clone(),
-                // 摘要可能含 rustdoc 生成的 markdown 链接，统一重写为 `.md`。
-                one_line: rewrite_links(
-                    &parse::parse_one_line(&html).unwrap_or_default(),
-                    LinkStyle::Relative,
-                ),
-                has_docs: item.docs_md.is_some(),
+                one_line,
+                has_docs,
                 has_members: !item.members.is_empty(),
                 file: rel_string(out_root, &item_output_path(out_root, &entry.html_path)),
                 html_path: rel_string(doc_root, &entry.html_path),

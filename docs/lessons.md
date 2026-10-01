@@ -156,6 +156,18 @@
 **对**：这是**相对当前 HTML 页面**的路径，换个页面就失效，调用方无法据此打开文件。应复用 `link::resolve_href` 归一化成**相对 `doc_root`** 的规范路径（`src/tokio/task/spawn.rs.html`），调用方（MCP server）再拼上 `--doc-dir` 得到绝对路径。
 **相关**：`parse.rs::parse_source_href`、`server.rs::get_item_source`
 
+### #1.24 rustdoc 1.98 的宏条目变成了二元组
+
+**错**：按 `BTreeMap<String, Vec<String>>` 反序列化 `sidebar-items.js`（1.95 的实测形态）。
+**对**：rustdoc 1.98 起，`macro` 组的条目从纯字符串变成 `[名字, 标志]` 二元组 —— `"macro":[["eprint",1],["println",1]]`，其余类型仍是字符串。旧解析直接 `JSON 解析失败：invalid type: sequence, expected a string`，**整个导出中断**（真实规模下 114 个 crate 全部失败）。改为按 `serde_json::Value` 解析、只取名字、丢弃标志位。注意同样的宏条目会同时存在 `macro.eprint.html`（正文）与 `macro.eprint!.html`（重定向页），由 sidebar 给出无 `!` 的正名后即可命中正文页。
+**相关**：`sidebar.rs::sidebar_entry_name`
+
+### #1.25 无文档条目的 `one_line` 是 rustdoc 占位文本
+
+**错**：`one_line` 无条件取页面的 `<meta name="description">`。
+**对**：没有文档注释时，rustdoc 会填入自动生成的占位描述（`API documentation for the Rust \`X\` struct in crate \`Y\`.`），于是出现 `has_docs:false` 却带一段"摘要"的条目 —— 真实规模 18922 条里有 1586 条。应只在 `docs_md` 存在时才生成 `one_line`（两者实测 100% 对应）。该改动影响索引内容，需递增 `INDEX_SCHEMA_VERSION`（#1.20）。
+**相关**：`index.rs`
+
 ## 2. 文件系统与路径
 
 ### #2.1 文件名绝不能用 `::`
@@ -181,6 +193,12 @@
 **错**：`list_items` / `search_items` 的 `kind` 用 `ItemKind::from_file_prefix(value)` 解析，取不到就当作"不限定"。
 **对**：`from_file_prefix` 只认**文件名前缀**（`fn` / `struct`），而工具描述里推荐的 `method`、以及更自然的 `function` 都不在其中；传这些值时过滤器**被静默忽略**，返回的是**全部类型**——Agent 会以为已过滤，得出错误结论。且 `from_file_prefix` 根本不含成员类型（`method` / `field` / `variant`）。修复：新增 `ItemKind::parse_input`（前缀 + 复数 + 自然名，自然名走 serde 反序列化，与 `index.json` 的 `kind` 同源），无法识别时**返回错误**。
 **相关**：`model.rs::ItemKind::parse_input`、`server.rs::parse_kind`
+
+### #4.2 省略类型标记的 id 必须能被 `get_item` / `get_item_source` 接受
+
+**错**：这两个工具只做 `item.id.0 == id` 精确匹配，而 `read_uri`（资源读取）用 `strip_kind_tags` 接受省略类型标记的写法。
+**对**：条目 id 带类型标记（`tokio::task::fn.spawn`），但工具描述里的示例、以及人的直觉都是省略形式（`tokio::task::spawn`）——两者不一致时 Agent 只会拿到 `未找到条目`。抽出 `find_summary`（精确优先、未中再退化匹配），让 `get_item` / `get_item_source` / 资源读取共用同一逻辑。
+**相关**：`server.rs::find_summary`
 
 ## 5. 工程、依赖与工具链
 

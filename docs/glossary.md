@@ -45,6 +45,7 @@
 | #2.7 | `search.index` | rustdoc 定制二进制压缩索引，**明确不使用** | 见 `lessons.md` #1.1 |
 | #2.8 | 实测事实底座 | design.md 中经真实产物核对的结构事实 | `design.md` §1 |
 | #2.9 | `rustdoc-vars` | 页面头部 meta，含 `data-current-crate` / `data-rustdoc-version` | `parse.rs::parse_rustdoc_meta` |
+| #2.10 | 宏条目二元组 | rustdoc 1.98+ 在 sidebar 里把宏写成 `[名字, 标志]` | `sidebar.rs::sidebar_entry_name`（见 `lessons.md` #1.24） |
 
 ## 3. 代码位置对照
 
@@ -66,3 +67,5 @@
 | #3.14 | server 模块 | MCP 工具与资源实现 | `crates/mcp-docs-server/src/server.rs` |
 | #3.15 | kind 参数、类型过滤 | 条目类型名的用户输入解析（前缀 / 复数 / 自然名） | `model.rs::ItemKind::parse_input`；`server.rs::parse_kind` |
 | #3.16 | 源码位置、source | 条目对应的源码文件与行号 | `parse.rs::parse_source_href`；MCP `get_item_source` |
+| #3.17 | 条目查找、find_summary | 按 id 找条目（精确优先，允许省略类型标记） | `server.rs::find_summary` |
+| #3.18 | 一行摘要、one_line | 索引里的简要描述，仅在有真实文档时生成 | `index.rs`（见 `lessons.md` #1.25） |

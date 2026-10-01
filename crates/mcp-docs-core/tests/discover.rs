@@ -28,6 +28,15 @@ fn parses_single_and_plural_sidebar_keys() {
 }
 
 #[test]
+fn parses_rustdoc_198_macro_pairs() {
+    // rustdoc 1.98 起，宏条目变成 `[名字, 标志]` 二元组，其余类型仍是纯字符串。
+    let js = r#"window.SIDEBAR_ITEMS = {"macro":[["eprint",1],["println",1]],"struct":["Demo"]};"#;
+    let groups = parse_sidebar_str(js).unwrap();
+    assert_eq!(groups[&ItemKind::Macro], vec!["eprint", "println"]);
+    assert_eq!(groups[&ItemKind::Struct], vec!["Demo"]);
+}
+
+#[test]
 fn ignores_unknown_sidebar_keys() {
     let js = r#"window.SIDEBAR_ITEMS = {"struct":["Demo"],"whatever":["x"]};"#;
     let groups = parse_sidebar_str(js).unwrap();

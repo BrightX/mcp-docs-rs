@@ -19,16 +19,35 @@ pub fn parse_sidebar_str(js: &str) -> Result<BTreeMap<ItemKind, Vec<String>>> {
             path: Path::new("sidebar-items.js").to_path_buf(),
             reason: "未找到 window.SIDEBAR_ITEMS 赋值".to_string(),
         })?;
-    let raw: BTreeMap<String, Vec<String>> = serde_json::from_str(json)?;
+    // 条目既可能是纯字符串，也可能是 `[名字, 标志]` 二元组，统一按 JSON 值解析。
+    let raw: BTreeMap<String, Vec<serde_json::Value>> = serde_json::from_str(json)?;
 
     let mut groups: BTreeMap<ItemKind, Vec<String>> = BTreeMap::new();
-    for (key, names) in raw {
+    for (key, entries) in raw {
         // 未知 key 直接忽略，保证向前兼容。
         if let Some(kind) = ItemKind::from_sidebar_key(&key) {
-            groups.entry(kind).or_default().extend(names);
+            groups
+                .entry(kind)
+                .or_default()
+                .extend(entries.into_iter().filter_map(sidebar_entry_name));
         }
     }
     Ok(groups)
+}
+
+/// 取出 sidebar 单个条目的名字。
+///
+/// rustdoc 1.98 起，宏条目变成 `[名字, 标志]` 二元组；其余类型仍是纯字符串。
+/// 只取名字、丢弃标志位，两种形态都兼容（见 `docs/lessons.md` #1.24）。
+fn sidebar_entry_name(value: serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(name) => Some(name),
+        serde_json::Value::Array(items) => items
+            .into_iter()
+            .next()
+            .and_then(|first| first.as_str().map(str::to_string)),
+        _ => None,
+    }
 }
 
 /// 解析某个目录下的 `sidebar-items.js`。

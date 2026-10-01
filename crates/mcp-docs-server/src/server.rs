@@ -55,7 +55,8 @@ struct SearchItemsParams {
 /// `get_item` / `get_item_source` 的参数。
 #[derive(Debug, serde::Deserialize, JsonSchema)]
 struct ItemParams {
-    /// 条目 id，如 `doc_probe::Demo::new`。
+    /// 条目 id，取自 `search_items` / `list_items` 的返回值（如 `tokio::task::fn.spawn`）；
+    /// 也可省略类型标记（如 `tokio::task::spawn`）。
     id: String,
     /// 返回 markdown 的字节上限（超出时按字符边界截断）。
     max_bytes: Option<usize>,
@@ -194,10 +195,7 @@ impl DocsServer {
     #[tool(description = "读取某个条目的完整 markdown 文档（签名 + 文档 + 成员）")]
     fn get_item(&self, Parameters(params): Parameters<ItemParams>) -> Result<String, String> {
         let index = self.index();
-        let summary = index
-            .items
-            .iter()
-            .find(|item| item.id.0 == params.id)
+        let summary = find_summary(&index, &params.id)
             .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
         let item = self.load_item(summary)?;
         let options = RenderOptions::default();
@@ -221,10 +219,7 @@ impl DocsServer {
         Parameters(params): Parameters<ItemParams>,
     ) -> Result<String, String> {
         let index = self.index();
-        let summary = index
-            .items
-            .iter()
-            .find(|item| item.id.0 == params.id)
+        let summary = find_summary(&index, &params.id)
             .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
         let item = self.load_item(summary)?;
 
@@ -356,17 +351,7 @@ impl DocsServer {
                 // 这里同时接受省略标记的写法（`rmcp::tool_router`）。
                 let id = {
                     let index = self.index();
-                    index
-                        .items
-                        .iter()
-                        .find(|summary| summary.id.0 == wanted)
-                        .or_else(|| {
-                            index
-                                .items
-                                .iter()
-                                .find(|summary| strip_kind_tags(&summary.id.0) == wanted)
-                        })
-                        .map(|summary| summary.id.0.clone())
+                    find_summary(&index, &wanted).map(|summary| summary.id.0.clone())
                 }
                 .ok_or_else(|| McpError::invalid_params(format!("未找到条目 `{wanted}`"), None))?;
 
@@ -478,6 +463,23 @@ fn matches_module(item: &ItemSummary, module: Option<&str>) -> bool {
         Some(module) => item.path.len() > 1 && item.path[1..].join("::").starts_with(module),
         None => true,
     }
+}
+
+/// 按 id 查找条目摘要。
+///
+/// 先精确匹配（含类型标记，如 `tokio::task::fn.spawn`）；未命中时退化为
+/// 省略类型标记的写法（`tokio::task::spawn`），与资源读取保持一致。
+fn find_summary<'a>(index: &'a Index, id: &str) -> Option<&'a ItemSummary> {
+    index
+        .items
+        .iter()
+        .find(|item| item.id.0 == id)
+        .or_else(|| {
+            index
+                .items
+                .iter()
+                .find(|item| strip_kind_tags(&item.id.0) == id)
+        })
 }
 
 /// 去掉 id 各段里的类型标记：`rmcp::attr.tool_router` → `rmcp::tool_router`。
