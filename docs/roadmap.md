@@ -14,7 +14,7 @@
 | M7 | 遗留特性补齐（分页 / 导出粒度 / all.html 兜底） | ✅ 已完成 |
 | M8 | 冷启动不阻塞 | ✅ 已完成 |
 | M9 | 性能优化（并行构建 / 检索 / 缓存 / 资源分页） | ✅ 已完成 |
-| M10 | MCP 工具扩展（工具已落地；协议能力进行中） | 🟡 进行中 |
+| M10 | MCP 工具扩展（工具 + 协议能力） | ✅ 已完成 |
 
 状态标记：⬜ 未开始 / 🟡 进行中 / ✅ 已完成 / ⛔ 阻塞。
 
@@ -197,9 +197,9 @@
 
 ## M10 — MCP 工具扩展
 
-状态：🟡 工具已落地；协议能力（结构化输出 / prompts / 通知）待续。
+状态：✅ 已完成。
 
-### 已完成
+### 工具（17 个）
 
 **读取类增强**
 - `get_examples {id, max_examples?, max_bytes?}`：渲染条目 markdown 后抽取 ```rust 围栏块。
@@ -222,19 +222,24 @@
 - `find_by_signature {pattern, crate?, kind?, limit?}`：按签名子串检索（`ItemSummary.signature`）。
 - `search_docs {query, crate?, kind?, limit?, offset?}`：方案 a（扫导出 markdown 正文）。
 
-**core 支撑**
+### 协议能力（rmcp 3.5）
+
+- **结构化输出**：`get_item_json` / `index_status` / `module_tree` / `search_items` 用 `rmcp::Json<T>`
+  返回，自动带 `outputSchema` 与 `structured_content`；`CallToolResult::structured` 同时保留文本内容
+  （JSON 字符串），兼容旧客户端。类型化输出结构：`SummaryOutput` / `ItemDetailOutput` /
+  `IndexStatusOutput` / `ModuleTreeNode`。
+- **prompts 模板**：手写 `list_prompts` / `get_prompt`，`get_info` 启用 `enable_prompts`；
+  提供 `explain_api` / `usage_example`（入参 `id`），引导模型先 `get_item` / `get_examples` 再作答。
+- **资源变更通知**：`DocsServer` 用 `Arc<OnceLock<Peer<RoleServer>>>` 捕获客户端句柄（资源请求经由
+  `context.peer`，`rebuild_index` 经 `Peer<RoleServer>` 参数注入）；后台构建完成、`rebuild_index`
+  成功后发 `notify_resource_list_changed`，`get_info` 启用 `enable_resources_list_changed`。
+  注：rmcp 3.5 的 logging 通知已按 SEP-2577 废弃，未采用。
+
+### core 支撑
+
 - `nav.rs`：`module_tree` / `related_items` / `parse_trait_impls` / `trait_impl_rel_path`。
 - `markdown.rs::extract_code_blocks`、`parse.rs::extract_source_lines`。
 - `ItemSummary` 新增 `signature`，`INDEX_SCHEMA_VERSION` 5 → 6。
-
-### 待续（协议能力，rmcp 3.5）
-
-- **结构化输出**：`get_item_json` / `index_status` / `module_tree` / `search_items` 改用
-  `rmcp::Json<T>` 包装（自动带 `outputSchema` + `structured_content`），并保留文本内容兼容旧客户端。
-- **prompts 模板**：`enable_prompts()` + `#[prompt_router]` / `#[prompt_handler]`，提供
-  「解释这个 API 的用法」「给出调用示例」等模板（入参 `item id`）。
-- **构建进度 / 资源变更通知**：`enable_logging()` + `enable_resources_list_changed()`，后台构建
-  开始 / 结束时经 `Peer` 发通知。
 
 ### 研究结论
 
@@ -242,6 +247,10 @@
   `parse.rs::extract_source_lines`。
 - `trait.impl/<crate>/<mod>/trait.<Name>.js`：`Object.fromEntries([["crate",[["impl ...",0]]]])` →
   已验证，见 `nav.rs::parse_trait_impls`。
+- 结构化输出：`rmcp::Json<T>`（`handler/server/wrapper/json.rs`）→ `CallToolResult::structured`
+  同时写 `content`（文本）与 `structured_content`。
+- 通知：`Peer` 提供 `notify_resource_list_changed` 等；`Peer<RoleServer>` 可经 `FromContextPart`
+  作为工具参数注入。
 
 ## 工作约定
 

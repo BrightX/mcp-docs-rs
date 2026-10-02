@@ -81,3 +81,6 @@
 | #3.27 | 源码文本、get_source_text | 按行号从 `src/*.rs.html` 切片 | `parse.rs::extract_source_lines` |
 | #3.28 | 示例抽取、get_examples | 抽取 markdown 里的 ```rust 围栏块 | `markdown.rs::extract_code_blocks` |
 | #3.29 | 签名、signature | 索引里的声明签名，供 find_by_signature | `model.rs::ItemSummary::signature` |
+| #3.30 | 结构化输出 | 工具返回 `outputSchema` + `structured_content` | `rmcp::Json<T>`；`server.rs::{SummaryOutput,ItemDetailOutput,IndexStatusOutput,ModuleTreeNode}` |
+| #3.31 | prompts 模板 | 可复用提示模板 | `server.rs::{prompt_definitions,build_prompt}`；`list_prompts` / `get_prompt` |
+| #3.32 | 资源变更通知 | 索引变化后通知客户端刷新资源清单 | `server.rs::{remember_peer,notify_resources_changed}` |

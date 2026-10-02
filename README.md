@@ -67,6 +67,8 @@ cargo run -p mcp-docs-server -- --doc-dir target/doc --out-dir target/doc-search
 
 资源：`rustdoc://crates`、`rustdoc://{crate}`（支持 `?offset=&limit=` 分页）、`rustdoc://{crate}/{item}`。
 
+Prompts：`explain_api` / `usage_example`（入参 `id`，引导模型先读文档再作答）。结构化输出：`search_items` / `get_item_json` / `index_status` / `module_tree` 返回带 `outputSchema` 的结构化内容（同时保留文本）。通知：后台构建完成或 `rebuild_index` 后发送 `notifications/resources/list_changed`。
+
 冷启动不阻塞：`initialize` 立即返回；首次的索引构建在后台进行，工具/资源会等待就绪后再返回（已有索引则直接服务、后台按需刷新）。
 
 典型流程：`search_items("spawn", crate="tokio")` → `get_item("tokio::spawn")` → 只拿到这一小块。

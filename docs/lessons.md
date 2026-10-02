@@ -260,3 +260,16 @@
 **错**：写 `r#"<a href="#1">1</a>"#` 时，字符串里的 `"#`（`href="#1"`）会被当成原始字符串的结束符，编译器报 `expected one of ... found '1'`。
 **对**：改用 `r##"..."##`（井号数量大于内容中出现的连续井号数）。凡是内嵌 HTML（含 `href="#..."`）或含 `"#` 序列的文本都要注意。
 **相关**：`crates/mcp-docs-core/tests/extras.rs`
+
+### #5.8 rmcp 结果结构体用 `..Default::default()` 而非先建后改
+
+**错**：`let mut r = ListPromptsResult::default(); r.prompts = ...;` 触发 clippy `field_reassign_with_default`（`-D warnings` 下报错）。
+**对**：rmcp 的 `ListPromptsResult` 等虽标注 `#[expect(clippy::exhaustive_structs)]`，仍可用函数式更新：
+`ListPromptsResult { prompts, ..Default::default() }`。
+**相关**：`crates/mcp-docs-server/src/server.rs`
+
+### #5.9 rmcp 3.5 的 logging 通知已废弃
+
+**错**：按 MCP 计划用 `enable_logging()` + `notify_logging_message` 发构建进度。
+**对**：rmcp 3.5 中 `notify_logging_message` 已按 SEP-2577 标注 `#[deprecated]`（未来版本移除），启用会触发 deprecation 警告。改为只发 `notify_resource_list_changed`（`enable_resources_list_changed`），通知客户端刷新资源清单即可。
+**相关**：`crates/mcp-docs-server/src/server.rs::notify_resources_changed`
