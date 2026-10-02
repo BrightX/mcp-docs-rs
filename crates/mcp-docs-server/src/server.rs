@@ -3,6 +3,7 @@
 //! 设计原则是「先搜后读」：检索类工具只返回轻量摘要，正文由 `get_item`
 //! 按需读取（内部走 `DocCache`，见 `design.md` §7、§8）。
 
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
@@ -20,8 +21,8 @@ use tokio::sync::watch;
 use mcp_docs_core::MatchMode;
 use mcp_docs_core::{
     build, is_stale, load_index, render_item, render_member_item, search_page, BuildOptions,
-    DocCache, DocItem, Granularity, Index, ItemKind, ItemSummary, ParseOptions, RenderOptions,
-    SearchQuery, INDEX_SCHEMA_VERSION,
+    DocCache, DocItem, Granularity, IdIndex, Index, ItemKind, ItemSummary, ParseOptions,
+    RenderOptions, SearchQuery, INDEX_SCHEMA_VERSION,
 };
 
 /// `list_items` 的参数。
@@ -75,12 +76,43 @@ struct RebuildParams {
     force: Option<bool>,
 }
 
+/// 已加载的索引，附带预建的 id 查找表。
+///
+/// 每个索引只构建一次查找表，避免每次按 id 查找都线性扫描全部条目。
+struct Loaded {
+    index: Index,
+    ids: IdIndex,
+}
+
+impl Loaded {
+    /// 用索引构建查找表。
+    fn new(index: Index) -> Self {
+        let ids = IdIndex::build(&index.items);
+        Self { index, ids }
+    }
+
+    /// 按 id 查找条目摘要（精确优先，退化到省略类型标记的写法）。
+    fn find(&self, id: &str) -> Option<&ItemSummary> {
+        self.ids
+            .find(id)
+            .map(|index_of| &self.index.items[index_of])
+    }
+}
+
+impl Deref for Loaded {
+    type Target = Index;
+
+    fn deref(&self) -> &Index {
+        &self.index
+    }
+}
+
 /// mcp-docs 的 MCP 服务。
 #[derive(Clone)]
 pub struct DocsServer {
     doc_dir: Arc<PathBuf>,
     out_dir: Arc<PathBuf>,
-    index: Arc<RwLock<Index>>,
+    index: Arc<RwLock<Loaded>>,
     cache: Arc<DocCache>,
     /// 索引就绪信号：后台加载/重建完成时置 `true`。
     ready: watch::Receiver<bool>,
@@ -105,7 +137,7 @@ impl DocsServer {
         let server = Self {
             doc_dir,
             out_dir,
-            index: Arc::new(RwLock::new(initial)),
+            index: Arc::new(RwLock::new(Loaded::new(initial))),
             cache: Arc::new(DocCache::new()),
             ready,
         };
@@ -163,12 +195,12 @@ impl DocsServer {
         *self
             .index
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = index;
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Loaded::new(index);
         Ok(())
     }
 
     /// 只读访问索引。
-    fn index(&self) -> RwLockReadGuard<'_, Index> {
+    fn index(&self) -> RwLockReadGuard<'_, Loaded> {
         self.index
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -189,6 +221,97 @@ impl DocsServer {
     #[tool(description = "列出已索引的 crate 及其条目数")]
     async fn list_crates(&self) -> String {
         self.ensure_ready().await;
+        self.list_crates_text()
+    }
+
+    /// 列出条目摘要（不含正文）。
+    #[tool(description = "列出条目摘要（可按 crate / 模块 / 类型过滤），不含正文")]
+    async fn list_items(
+        &self,
+        Parameters(params): Parameters<ListItemsParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.list_items_blocking(params))
+            .await
+            .map_err(|err| format!("列条目任务失败：{err}"))?
+    }
+
+    /// 检索条目。
+    #[tool(description = "按名字 / 路径 / 摘要检索条目，返回轻量摘要与得分")]
+    async fn search_items(
+        &self,
+        Parameters(params): Parameters<SearchItemsParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.search_items_blocking(params))
+            .await
+            .map_err(|err| format!("检索任务失败：{err}"))?
+    }
+
+    /// 读取条目的完整 markdown。
+    #[tool(description = "读取某个条目的完整 markdown 文档（签名 + 文档 + 成员）")]
+    async fn get_item(&self, Parameters(params): Parameters<ItemParams>) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.get_item_blocking(params))
+            .await
+            .map_err(|err| format!("读取条目任务失败：{err}"))?
+    }
+
+    /// 查询条目的源码位置。
+    #[tool(description = "查询条目对应的源码文件与行号")]
+    async fn get_item_source(
+        &self,
+        Parameters(params): Parameters<ItemParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.get_item_source_blocking(params))
+            .await
+            .map_err(|err| format!("查询源码任务失败：{err}"))?
+    }
+
+    /// 重建索引。
+    #[tool(description = "重新扫描产物目录并重建索引（默认增量）")]
+    async fn rebuild_index(
+        &self,
+        Parameters(params): Parameters<RebuildParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+
+        let options = BuildOptions {
+            persist: true,
+            incremental: !params.force.unwrap_or(false),
+            ..Default::default()
+        };
+        let doc_dir = self.doc_dir.clone();
+        let out_dir = self.out_dir.clone();
+        let report = tokio::task::spawn_blocking(move || build(&doc_dir, &out_dir, &options))
+            .await
+            .map_err(|err| format!("重建任务失败：{err}"))?
+            .map_err(|err| format!("重建索引失败：{err}"))?;
+
+        self.cache.invalidate();
+        let item_count = report.index.items.len();
+        *self
+            .index
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Loaded::new(report.index);
+
+        Ok(to_json(&serde_json::json!({
+            "rebuilt": true,
+            "reused": report.reused,
+            "item_count": item_count,
+        })))
+    }
+}
+
+/// 工具的同步实现（在 `spawn_blocking` 中执行，避免阻塞 async 执行器）。
+impl DocsServer {
+    /// 列出已索引 crate 的 JSON 文本。
+    fn list_crates_text(&self) -> String {
         let index = self.index();
         let crates: Vec<serde_json::Value> = index
             .crates
@@ -204,13 +327,8 @@ impl DocsServer {
         to_json(&serde_json::json!({ "crates": crates }))
     }
 
-    /// 列出条目摘要（不含正文）。
-    #[tool(description = "列出条目摘要（可按 crate / 模块 / 类型过滤），不含正文")]
-    async fn list_items(
-        &self,
-        Parameters(params): Parameters<ListItemsParams>,
-    ) -> Result<String, String> {
-        self.ensure_ready().await;
+    /// `list_items` 的同步实现。
+    fn list_items_blocking(&self, params: ListItemsParams) -> Result<String, String> {
         let index = self.index();
         let kind = params.kind.as_deref().map(parse_kind).transpose()?;
 
@@ -239,13 +357,8 @@ impl DocsServer {
         })))
     }
 
-    /// 检索条目。
-    #[tool(description = "按名字 / 路径 / 摘要检索条目，返回轻量摘要与得分")]
-    async fn search_items(
-        &self,
-        Parameters(params): Parameters<SearchItemsParams>,
-    ) -> Result<String, String> {
-        self.ensure_ready().await;
+    /// `search_items` 的同步实现。
+    fn search_items_blocking(&self, params: SearchItemsParams) -> Result<String, String> {
         let index = self.index();
         let mut query = SearchQuery::new(params.query);
         query.crate_name = params.crate_name;
@@ -267,6 +380,9 @@ impl DocsServer {
             .map(|hit| {
                 let mut value = summary_json(&hit.item);
                 value["score"] = serde_json::json!(hit.score);
+                if let Some(snippet) = &hit.snippet {
+                    value["snippet"] = serde_json::json!(snippet);
+                }
                 value
             })
             .collect();
@@ -279,12 +395,11 @@ impl DocsServer {
         })))
     }
 
-    /// 读取条目的完整 markdown。
-    #[tool(description = "读取某个条目的完整 markdown 文档（签名 + 文档 + 成员）")]
-    async fn get_item(&self, Parameters(params): Parameters<ItemParams>) -> Result<String, String> {
-        self.ensure_ready().await;
+    /// `get_item` 的同步实现。
+    fn get_item_blocking(&self, params: ItemParams) -> Result<String, String> {
         let index = self.index();
-        let summary = find_summary(&index, &params.id)
+        let summary = index
+            .find(&params.id)
             .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
         let item = self.load_item(summary)?;
         let options = RenderOptions::default();
@@ -301,15 +416,11 @@ impl DocsServer {
         Ok(truncate(markdown, params.max_bytes))
     }
 
-    /// 查询条目的源码位置。
-    #[tool(description = "查询条目对应的源码文件与行号")]
-    async fn get_item_source(
-        &self,
-        Parameters(params): Parameters<ItemParams>,
-    ) -> Result<String, String> {
-        self.ensure_ready().await;
+    /// `get_item_source` 的同步实现。
+    fn get_item_source_blocking(&self, params: ItemParams) -> Result<String, String> {
         let index = self.index();
-        let summary = find_summary(&index, &params.id)
+        let summary = index
+            .find(&params.id)
             .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
         let item = self.load_item(summary)?;
 
@@ -326,40 +437,6 @@ impl DocsServer {
         Ok(to_json(&serde_json::json!({
             "id": params.id,
             "source": source,
-        })))
-    }
-
-    /// 重建索引。
-    #[tool(description = "重新扫描产物目录并重建索引（默认增量）")]
-    async fn rebuild_index(
-        &self,
-        Parameters(params): Parameters<RebuildParams>,
-    ) -> Result<String, String> {
-        self.ensure_ready().await;
-
-        let options = BuildOptions {
-            persist: true,
-            incremental: !params.force.unwrap_or(false),
-            ..Default::default()
-        };
-        let doc_dir = self.doc_dir.clone();
-        let out_dir = self.out_dir.clone();
-        let report = tokio::task::spawn_blocking(move || build(&doc_dir, &out_dir, &options))
-            .await
-            .map_err(|err| format!("重建任务失败：{err}"))?
-            .map_err(|err| format!("重建索引失败：{err}"))?;
-
-        self.cache.invalidate();
-        let item_count = report.index.items.len();
-        *self
-            .index
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = report.index;
-
-        Ok(to_json(&serde_json::json!({
-            "rebuilt": true,
-            "reused": report.reused,
-            "item_count": item_count,
         })))
     }
 }
@@ -406,8 +483,12 @@ impl ServerHandler for DocsServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
         Ok(ListResourceTemplatesResult {
-            resource_templates: vec![ResourceTemplate::new("rustdoc://{crate}/{+item}", "item")
-                .with_description("某个条目的 markdown 文档")],
+            resource_templates: vec![
+                ResourceTemplate::new("rustdoc://{crate}/{+item}", "item")
+                    .with_description("某个条目的 markdown 文档"),
+                ResourceTemplate::new("rustdoc://{crate}", "crate")
+                    .with_description("某个 crate 的条目列表（支持 ?offset=&limit= 分页）"),
+            ],
             ..Default::default()
         })
     }
@@ -432,6 +513,12 @@ impl DocsServer {
             .strip_prefix("rustdoc://")
             .ok_or_else(|| McpError::invalid_params(format!("非 rustdoc URI：{uri}"), None))?;
 
+        // 支持资源分页：`rustdoc://{crate}?offset=N&limit=M`。
+        let (path, query) = match path.split_once('?') {
+            Some((path, query)) => (path, query),
+            None => (path, ""),
+        };
+
         if path == "crates" {
             return Ok(self.list_crates().await);
         }
@@ -447,11 +534,13 @@ impl DocsServer {
                 let wanted = format!("{crate_name}::{}", item.replace('/', "::"));
                 // 条目 id 带类型标记（如 `rmcp::attr.tool_router`），
                 // 这里同时接受省略标记的写法（`rmcp::tool_router`）。
-                let id = {
-                    let index = self.index();
-                    find_summary(&index, &wanted).map(|summary| summary.id.0.clone())
-                }
-                .ok_or_else(|| McpError::invalid_params(format!("未找到条目 `{wanted}`"), None))?;
+                let id = self
+                    .index()
+                    .find(&wanted)
+                    .map(|summary| summary.id.0.clone())
+                    .ok_or_else(|| {
+                        McpError::invalid_params(format!("未找到条目 `{wanted}`"), None)
+                    })?;
 
                 self.get_item(Parameters(ItemParams {
                     id,
@@ -460,16 +549,26 @@ impl DocsServer {
                 .await
                 .map_err(|message| McpError::invalid_params(message, None))
             }
-            // rustdoc://{crate}：该 crate 的条目清单。
-            None => self.crate_listing(crate_name),
+            // rustdoc://{crate}：该 crate 的条目清单（可带 offset / limit）。
+            None => self.crate_listing(
+                crate_name,
+                query_param(query, "offset").unwrap_or(0),
+                query_param(query, "limit"),
+            ),
         }
     }
 
-    /// 列出某个 crate 的全部条目摘要。
-    fn crate_listing(&self, crate_name: &str) -> Result<String, McpError> {
-        // 资源没有分页参数，这里设安全上限，避免大 crate（rmcp 2000+ 条）
+    /// 列出某个 crate 的条目摘要（支持 `offset` / `limit` 分页）。
+    fn crate_listing(
+        &self,
+        crate_name: &str,
+        offset: usize,
+        limit: Option<usize>,
+    ) -> Result<String, McpError> {
+        // 资源没有分页参数时也设安全上限，避免大 crate（rmcp 2000+ 条）
         // 返回超大 JSON 撑爆上下文；细粒度浏览应改用 `list_items`。
-        const LIMIT: usize = 500;
+        const MAX_LIMIT: usize = 500;
+        let limit = limit.unwrap_or(MAX_LIMIT).min(MAX_LIMIT);
 
         let index = self.index();
         let all: Vec<&ItemSummary> = index
@@ -487,14 +586,17 @@ impl DocsServer {
 
         let items: Vec<serde_json::Value> = all
             .iter()
-            .take(LIMIT)
+            .skip(offset)
+            .take(limit)
             .map(|item| summary_json(item))
             .collect();
         Ok(to_json(&serde_json::json!({
             "crate": crate_name,
             "item_count": all.len(),
+            "offset": offset,
+            "limit": limit,
             "returned": items.len(),
-            "truncated": all.len() > items.len(),
+            "truncated": offset + items.len() < all.len(),
             "items": items,
         })))
     }
@@ -551,42 +653,39 @@ fn matches_crate(item: &ItemSummary, crate_name: Option<&str>) -> bool {
 }
 
 /// 是否位于指定模块下（`None` 表示不限）。
-fn matches_module(item: &ItemSummary, module: Option<&str>) -> bool {
-    match module {
-        Some(module) => item.path.len() > 1 && item.path[1..].join("::").starts_with(module),
-        None => true,
-    }
-}
-
-/// 按 id 查找条目摘要。
 ///
-/// 先精确匹配（含类型标记，如 `tokio::task::fn.spawn`）；未命中时退化为
-/// 省略类型标记的写法（`tokio::task::spawn`），与资源读取保持一致。
-fn find_summary<'a>(index: &'a Index, id: &str) -> Option<&'a ItemSummary> {
-    index.items.iter().find(|item| item.id.0 == id).or_else(|| {
-        index
-            .items
-            .iter()
-            .find(|item| strip_kind_tags(&item.id.0) == id)
-    })
+/// 按「路径段」精确匹配，避免 `in` 误配到 `inner`（见 `docs/lessons.md` #4.1）。
+/// 保留旧语义：只有位于 crate 之下（`path.len() > 1`）的条目才可能命中，
+/// 空串模块名视为「任意子模块」。
+fn matches_module(item: &ItemSummary, module: Option<&str>) -> bool {
+    let Some(module) = module else {
+        return true;
+    };
+    if item.path.len() <= 1 {
+        return false;
+    }
+    if module.is_empty() {
+        return true;
+    }
+    let mut wanted = module.split("::");
+    let mut actual = item.path[1..].iter();
+    wanted.all(|segment| actual.next().map(String::as_str) == Some(segment))
 }
 
-/// 去掉 id 各段里的类型标记：`rmcp::attr.tool_router` → `rmcp::tool_router`。
-fn strip_kind_tags(id: &str) -> String {
-    id.split("::")
-        .map(|segment| {
-            segment
-                .split_once('.')
-                .map(|(_, name)| name)
-                .unwrap_or(segment)
-        })
-        .collect::<Vec<_>>()
-        .join("::")
+/// 从查询串里取一个 `usize` 参数，如 `offset=10&limit=5`。
+fn query_param(query: &str, key: &str) -> Option<usize> {
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(name, _)| *name == key)
+        .and_then(|(_, value)| value.parse().ok())
 }
 
-/// 序列化为带缩进的 JSON 文本。
+/// 序列化为紧凑 JSON 文本。
+///
+/// 工具结果是给模型读的结构化数据，缩进空白只增加 token 成本、不增信息量。
 fn to_json(value: &serde_json::Value) -> String {
-    serde_json::to_string_pretty(value).unwrap_or_else(|err| format!("序列化失败：{err}"))
+    serde_json::to_string(value).unwrap_or_else(|err| format!("序列化失败：{err}"))
 }
 
 /// 按字节上限截断文本（保证 UTF-8 字符边界），并附带提示。
@@ -644,5 +743,51 @@ mod tests {
         let server = DocsServer::new(doc_dir, out.path().to_path_buf()).unwrap();
         assert!(*server.ready.borrow(), "已有索引时应立即就绪");
         assert_eq!(server.index().crates.len(), 1);
+    }
+
+    /// 构造一个最小条目摘要，用于纯函数测试。
+    fn summary(path: &[&str]) -> ItemSummary {
+        ItemSummary {
+            id: mcp_docs_core::ItemId("x".to_string()),
+            kind: ItemKind::Struct,
+            name: "x".to_string(),
+            path: path.iter().map(|segment| (*segment).to_string()).collect(),
+            one_line: String::new(),
+            has_docs: false,
+            has_members: false,
+            file: String::new(),
+            html_path: String::new(),
+            parent_id: None,
+            src_mtime: None,
+        }
+    }
+
+    /// 模块过滤按整段匹配，`in` 不应误配 `inner`。
+    #[test]
+    fn module_filter_matches_whole_segments() {
+        assert!(!matches_module(&summary(&["k", "inner"]), Some("in")));
+        assert!(matches_module(&summary(&["k", "inner"]), Some("inner")));
+        assert!(matches_module(
+            &summary(&["k", "inner", "sub"]),
+            Some("inner::sub")
+        ));
+        assert!(!matches_module(
+            &summary(&["k", "inner"]),
+            Some("inner::sub")
+        ));
+        // 不在 crate 之下时不匹配。
+        assert!(!matches_module(&summary(&["k"]), Some("k")));
+        // None / 空串保持旧语义。
+        assert!(matches_module(&summary(&["k"]), None));
+        assert!(matches_module(&summary(&["k", "inner"]), Some("")));
+    }
+
+    /// 资源分页参数解析。
+    #[test]
+    fn query_params_parse_usize() {
+        assert_eq!(query_param("offset=10&limit=5", "offset"), Some(10));
+        assert_eq!(query_param("offset=10&limit=5", "limit"), Some(5));
+        assert_eq!(query_param("offset=x", "offset"), None);
+        assert_eq!(query_param("", "offset"), None);
     }
 }
