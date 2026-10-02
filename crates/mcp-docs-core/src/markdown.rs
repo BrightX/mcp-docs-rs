@@ -225,6 +225,30 @@ fn rewrite_path_ext(path: &str) -> String {
     }
 }
 
+/// 从 markdown 中抽取全部围栏代码块，返回 `(语言, 代码)`。
+///
+/// 语言取自围栏的信息串（如 `rust` / `text`），无信息串时为空串。
+pub fn extract_code_blocks(markdown: &str) -> Vec<(String, String)> {
+    let mut blocks = Vec::new();
+    let mut lines = markdown.lines();
+    while let Some(line) = lines.next() {
+        let Some(info) = line.trim_start().strip_prefix("```") else {
+            continue;
+        };
+        let language = info.trim().to_string();
+        let mut code = String::new();
+        for body in lines.by_ref() {
+            if body.trim_start().starts_with("```") {
+                break;
+            }
+            code.push_str(body);
+            code.push('\n');
+        }
+        blocks.push((language, code.trim_end().to_string()));
+    }
+    blocks
+}
+
 /// 把 markdown 链接 `[文本](目标)` 简化为纯文本 `文本`。
 fn strip_links(markdown: &str) -> String {
     let mut out = String::with_capacity(markdown.len());

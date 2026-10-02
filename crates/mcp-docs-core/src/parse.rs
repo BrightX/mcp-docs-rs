@@ -401,6 +401,69 @@ fn docblock_to_md(docblock: &ElementRef) -> String {
     markdown.trim().to_string()
 }
 
+/// 从 rustdoc 源码页（`src/.../*.rs.html`）提取指定行范围的源码文本。
+///
+/// 源码页结构为 `pre.rust code`，每一行行首有一个 `<a id="N">N</a>` 行号锚点；
+/// 锚点之间的文本即该行内容。结构不符（非 1.98 风格）时返回 `None`，
+/// 调用方可回退为「仅返回路径与行号」。
+pub fn extract_source_lines(html: &str, start: u32, end: u32) -> Option<String> {
+    let document = Html::parse_document(html);
+    let code = document
+        .select(selector!("pre.rust code"))
+        .next()
+        .or_else(|| document.select(selector!("pre.rust")).next())?;
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut current: Option<usize> = None;
+    collect_source_lines(&code, &mut lines, &mut current);
+    if lines.is_empty() {
+        return None;
+    }
+
+    let total = lines.len() as u32;
+    let start = start.clamp(1, total);
+    let end = end.min(total).max(start);
+    let text = lines[(start - 1) as usize..end as usize]
+        .iter()
+        .map(|line| line.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(text)
+}
+
+/// 递归收集源码行：行号锚点切换当前行，其余文本累积到当前行。
+fn collect_source_lines(el: &ElementRef, lines: &mut Vec<String>, current: &mut Option<usize>) {
+    for child in el.children() {
+        match child.value() {
+            Node::Text(text) => {
+                if let Some(line_no) = *current {
+                    if lines.len() < line_no {
+                        lines.resize(line_no, String::new());
+                    }
+                    lines[line_no - 1].push_str(&text.text);
+                }
+            }
+            Node::Element(inner) => {
+                // 行号锚点：只取其 `id` 作为行号，跳过其文本（号码本身）。
+                if inner.name() == "a" {
+                    if let Some(line_no) = inner.attr("id").and_then(|id| id.parse::<usize>().ok())
+                    {
+                        *current = Some(line_no);
+                        if lines.len() < line_no {
+                            lines.resize(line_no, String::new());
+                        }
+                        continue;
+                    }
+                }
+                if let Some(child) = ElementRef::wrap(child) {
+                    collect_source_lines(&child, lines, current);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// 清理签名文本里的 rustdoc 装饰字符。
 ///
 /// rustdoc 会在签名中插入可点击的提示图标（如 `ⓘ`），它们是纯噪声。

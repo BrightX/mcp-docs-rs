@@ -3,8 +3,10 @@
 //! 设计原则是「先搜后读」：检索类工具只返回轻量摘要，正文由 `get_item`
 //! 按需读取（内部走 `DocCache`，见 `design.md` §7、§8）。
 
+use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -20,9 +22,10 @@ use tokio::sync::watch;
 
 use mcp_docs_core::MatchMode;
 use mcp_docs_core::{
-    build, is_stale, load_index, render_item, render_member_item, search_page, BuildOptions,
-    DocCache, DocItem, Granularity, IdIndex, Index, ItemKind, ItemSummary, ParseOptions,
-    RenderOptions, SearchQuery, INDEX_SCHEMA_VERSION,
+    build, extract_code_blocks, extract_source_lines, is_stale, load_index, module_tree,
+    parse_trait_impls, related_items, render_item, render_member_item, search_page,
+    trait_impl_rel_path, BuildOptions, DocCache, DocItem, Granularity, IdIndex, Index, ItemKind,
+    ItemSummary, ParseOptions, RenderOptions, SearchQuery, INDEX_SCHEMA_VERSION,
 };
 
 /// `list_items` 的参数。
@@ -76,6 +79,89 @@ struct RebuildParams {
     force: Option<bool>,
 }
 
+/// `get_examples` 的参数。
+#[derive(Debug, serde::Deserialize, JsonSchema)]
+struct GetExamplesParams {
+    /// 条目 id。
+    id: String,
+    /// 最多返回的示例数，默认 5。
+    max_examples: Option<usize>,
+    /// 每个示例的字节上限（超出按字符边界截断）。
+    max_bytes: Option<usize>,
+}
+
+/// `get_item_section` 的参数。
+#[derive(Debug, serde::Deserialize, JsonSchema)]
+struct GetItemSectionParams {
+    /// 条目 id。
+    id: String,
+    /// 分节名（如 `examples` / `panics` / `implementations`），大小写不敏感。
+    section: String,
+}
+
+/// `batch_get_items` 的参数。
+#[derive(Debug, serde::Deserialize, JsonSchema)]
+struct BatchGetItemsParams {
+    /// 条目 id 列表（上限 20）。
+    ids: Vec<String>,
+    /// 每个条目的 markdown 字节上限。
+    max_bytes_each: Option<usize>,
+}
+
+/// `get_source_text` 的参数。
+#[derive(Debug, serde::Deserialize, JsonSchema)]
+struct GetSourceTextParams {
+    /// 条目 id。
+    id: String,
+    /// 源码文本的字节上限。
+    max_bytes: Option<usize>,
+}
+
+/// `module_tree` 的参数。
+#[derive(Debug, serde::Deserialize, JsonSchema)]
+struct ModuleTreeParams {
+    /// crate 名。
+    #[serde(rename = "crate")]
+    crate_name: String,
+}
+
+/// `get_related_items` 的参数。
+#[derive(Debug, serde::Deserialize, JsonSchema)]
+struct RelatedItemsParams {
+    /// 条目 id。
+    id: String,
+}
+
+/// `find_by_signature` 的参数。
+#[derive(Debug, serde::Deserialize, JsonSchema)]
+struct FindBySignatureParams {
+    /// 签名子串（如 `-> Result<`），大小写不敏感。
+    pattern: String,
+    /// 限定 crate。
+    #[serde(rename = "crate")]
+    crate_name: Option<String>,
+    /// 限定条目类型。
+    kind: Option<String>,
+    /// 返回上限，默认 20。
+    limit: Option<usize>,
+}
+
+/// `search_docs` 的参数。
+#[derive(Debug, serde::Deserialize, JsonSchema)]
+struct SearchDocsParams {
+    /// 查询词。
+    query: String,
+    /// 限定 crate。
+    #[serde(rename = "crate")]
+    crate_name: Option<String>,
+    /// 限定条目类型。
+    kind: Option<String>,
+    /// 返回上限，默认 20。
+    limit: Option<usize>,
+    /// 跳过的命中数（分页）。
+    offset: Option<usize>,
+}
+
 /// 已加载的索引，附带预建的 id 查找表。
 ///
 /// 每个索引只构建一次查找表，避免每次按 id 查找都线性扫描全部条目。
@@ -116,6 +202,8 @@ pub struct DocsServer {
     cache: Arc<DocCache>,
     /// 索引就绪信号：后台加载/重建完成时置 `true`。
     ready: watch::Receiver<bool>,
+    /// 是否正在后台构建索引（供 `index_status` 暴露进度）。
+    building: Arc<AtomicBool>,
 }
 
 impl DocsServer {
@@ -140,14 +228,18 @@ impl DocsServer {
             index: Arc::new(RwLock::new(Loaded::new(initial))),
             cache: Arc::new(DocCache::new()),
             ready,
+            building: Arc::new(AtomicBool::new(false)),
         };
 
         // 后台刷新索引；无论成功与否都要置位就绪，避免调用方永久等待。
         let worker = server.clone();
+        let building = server.building.clone();
         tokio::spawn(async move {
+            building.store(true, Ordering::Relaxed);
             if let Err(err) = worker.refresh_index(!has_index).await {
                 eprintln!("后台构建索引失败：{err:#}");
             }
+            building.store(false, Ordering::Relaxed);
             let _ = ready_tx.send(true);
         });
 
@@ -273,6 +365,147 @@ impl DocsServer {
             .map_err(|err| format!("查询源码任务失败：{err}"))?
     }
 
+    /// 抽取条目文档里的 rust 代码示例。
+    #[tool(description = "抽取某个条目文档里的 rust 代码示例")]
+    async fn get_examples(
+        &self,
+        Parameters(params): Parameters<GetExamplesParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.get_examples_blocking(params))
+            .await
+            .map_err(|err| format!("抽取示例任务失败：{err}"))?
+    }
+
+    /// 读取条目某个分节的 markdown。
+    #[tool(description = "返回条目某个分节（如 examples / panics / implementations）的 markdown")]
+    async fn get_item_section(
+        &self,
+        Parameters(params): Parameters<GetItemSectionParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.get_item_section_blocking(params))
+            .await
+            .map_err(|err| format!("读取分节任务失败：{err}"))?
+    }
+
+    /// 批量读取条目 markdown。
+    #[tool(description = "批量读取多个条目的 markdown（ids 上限 20）")]
+    async fn batch_get_items(
+        &self,
+        Parameters(params): Parameters<BatchGetItemsParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.batch_get_items_blocking(params))
+            .await
+            .map_err(|err| format!("批量读取任务失败：{err}"))?
+    }
+
+    /// 按源码位置读取源码文本。
+    #[tool(description = "按源码位置读取条目对应的源码文本；取不到时回退为路径与行号")]
+    async fn get_source_text(
+        &self,
+        Parameters(params): Parameters<GetSourceTextParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.get_source_text_blocking(params))
+            .await
+            .map_err(|err| format!("读取源码任务失败：{err}"))?
+    }
+
+    /// 返回结构化条目。
+    #[tool(
+        description = "返回条目的结构化 JSON（id / kind / signature / docs / sections / members）"
+    )]
+    async fn get_item_json(
+        &self,
+        Parameters(params): Parameters<ItemParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.get_item_json_blocking(params))
+            .await
+            .map_err(|err| format!("读取结构化条目任务失败：{err}"))?
+    }
+
+    /// 返回索引状态。
+    #[tool(description = "返回索引状态：就绪 / 构建中 / schema / 版本 / 计数 / 是否过期")]
+    async fn index_status(&self) -> Result<String, String> {
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.index_status_blocking())
+            .await
+            .map_err(|err| format!("读取索引状态任务失败：{err}"))?
+    }
+
+    /// 返回 crate 的模块树。
+    #[tool(description = "返回某个 crate 的模块树（含每级条目数）")]
+    async fn module_tree(
+        &self,
+        Parameters(params): Parameters<ModuleTreeParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.module_tree_blocking(params))
+            .await
+            .map_err(|err| format!("构建模块树任务失败：{err}"))?
+    }
+
+    /// 返回条目的相关条目。
+    #[tool(description = "返回条目的父条目、同模块兄弟与子成员")]
+    async fn get_related_items(
+        &self,
+        Parameters(params): Parameters<RelatedItemsParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.get_related_items_blocking(params))
+            .await
+            .map_err(|err| format!("查询相关条目任务失败：{err}"))?
+    }
+
+    /// 列出 trait 的实现者。
+    #[tool(description = "列出实现了某个 trait 的类型")]
+    async fn get_trait_implementors(
+        &self,
+        Parameters(params): Parameters<ItemParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.get_trait_implementors_blocking(params))
+            .await
+            .map_err(|err| format!("查询 trait 实现者任务失败：{err}"))?
+    }
+
+    /// 按签名子串检索。
+    #[tool(description = "按签名子串（如 `-> Result<`）检索条目")]
+    async fn find_by_signature(
+        &self,
+        Parameters(params): Parameters<FindBySignatureParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.find_by_signature_blocking(params))
+            .await
+            .map_err(|err| format!("按签名检索任务失败：{err}"))?
+    }
+
+    /// 正文全文检索。
+    #[tool(description = "在已导出的 markdown 正文里做全文检索")]
+    async fn search_docs(
+        &self,
+        Parameters(params): Parameters<SearchDocsParams>,
+    ) -> Result<String, String> {
+        self.ensure_ready().await;
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || server.search_docs_blocking(params))
+            .await
+            .map_err(|err| format!("正文检索任务失败：{err}"))?
+    }
+
     /// 重建索引。
     #[tool(description = "重新扫描产物目录并重建索引（默认增量）")]
     async fn rebuild_index(
@@ -288,10 +521,12 @@ impl DocsServer {
         };
         let doc_dir = self.doc_dir.clone();
         let out_dir = self.out_dir.clone();
+        self.building.store(true, Ordering::Relaxed);
         let report = tokio::task::spawn_blocking(move || build(&doc_dir, &out_dir, &options))
             .await
             .map_err(|err| format!("重建任务失败：{err}"))?
             .map_err(|err| format!("重建索引失败：{err}"))?;
+        self.building.store(false, Ordering::Relaxed);
 
         self.cache.invalidate();
         let item_count = report.index.items.len();
@@ -437,6 +672,356 @@ impl DocsServer {
         Ok(to_json(&serde_json::json!({
             "id": params.id,
             "source": source,
+        })))
+    }
+
+    /// 定位条目并渲染其完整 markdown（成员只渲染自身小节）。
+    fn render_full_markdown(&self, id: &str) -> Result<String, String> {
+        let index = self.index();
+        let summary = index.find(id).ok_or_else(|| format!("未找到条目 `{id}`"))?;
+        let item = self.load_item(summary)?;
+        let options = RenderOptions::default();
+        Ok(if summary.kind.is_member() {
+            match item.members.iter().find(|member| member.id == summary.id) {
+                Some(member) => render_member_item(member, &options),
+                None => render_item(&item, &options),
+            }
+        } else {
+            render_item(&item, &options)
+        })
+    }
+
+    /// `get_examples` 的同步实现。
+    fn get_examples_blocking(&self, params: GetExamplesParams) -> Result<String, String> {
+        let markdown = self.render_full_markdown(&params.id)?;
+        let max_examples = params.max_examples.unwrap_or(5);
+        let examples: Vec<serde_json::Value> = extract_code_blocks(&markdown)
+            .into_iter()
+            .filter(|(language, _)| language.starts_with("rust"))
+            .take(max_examples)
+            .map(|(language, code)| {
+                let code = truncate(code, params.max_bytes);
+                serde_json::json!({ "language": language, "code": code })
+            })
+            .collect();
+        Ok(to_json(&serde_json::json!({
+            "id": params.id,
+            "returned": examples.len(),
+            "examples": examples,
+        })))
+    }
+
+    /// `get_item_section` 的同步实现。
+    fn get_item_section_blocking(&self, params: GetItemSectionParams) -> Result<String, String> {
+        let index = self.index();
+        let summary = index
+            .find(&params.id)
+            .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
+        let item = self.load_item(summary)?;
+        let wanted = params.section.trim().to_ascii_lowercase();
+        let options = RenderOptions::default();
+
+        let Some(section) = item.sections.iter().find(|section| {
+            section.id.eq_ignore_ascii_case(&wanted) || section.title.to_ascii_lowercase() == wanted
+        }) else {
+            let available: Vec<&str> = item.sections.iter().map(|s| s.id.as_str()).collect();
+            return Err(format!(
+                "条目 `{}` 没有分节 `{}`；可用分节：{}",
+                params.id,
+                params.section,
+                available.join(", ")
+            ));
+        };
+
+        let members: Vec<serde_json::Value> = section
+            .members
+            .iter()
+            .map(|member| {
+                serde_json::json!({
+                    "id": member.id.0,
+                    "name": member.name,
+                    "markdown": render_member_item(member, &options),
+                })
+            })
+            .collect();
+        Ok(to_json(&serde_json::json!({
+            "id": params.id,
+            "section": section.id,
+            "title": section.title,
+            "body_md": section.body_md,
+            "returned": members.len(),
+            "members": members,
+        })))
+    }
+
+    /// `batch_get_items` 的同步实现。
+    fn batch_get_items_blocking(&self, params: BatchGetItemsParams) -> Result<String, String> {
+        const MAX_IDS: usize = 20;
+        let mut items = Vec::new();
+        for id in params.ids.iter().take(MAX_IDS) {
+            match self.render_full_markdown(id) {
+                Ok(markdown) => items.push(serde_json::json!({
+                    "id": id,
+                    "markdown": truncate(markdown, params.max_bytes_each),
+                })),
+                Err(err) => items.push(serde_json::json!({ "id": id, "error": err })),
+            }
+        }
+        Ok(to_json(&serde_json::json!({
+            "requested": params.ids.len(),
+            "returned": items.len(),
+            "truncated": params.ids.len() > MAX_IDS,
+            "items": items,
+        })))
+    }
+
+    /// `get_source_text` 的同步实现。
+    fn get_source_text_blocking(&self, params: GetSourceTextParams) -> Result<String, String> {
+        let index = self.index();
+        let summary = index
+            .find(&params.id)
+            .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
+        let item = self.load_item(summary)?;
+
+        let Some(source) = item.source.as_ref() else {
+            return Ok(to_json(&serde_json::json!({
+                "id": params.id,
+                "source": null,
+                "text": null,
+                "note": "该条目没有源码位置",
+            })));
+        };
+
+        let path = self.doc_dir.join(&source.file);
+        let text = fs::read_to_string(&path).ok().and_then(|html| {
+            let start = source.line_start.unwrap_or(1);
+            let end = source.line_end.unwrap_or(u32::MAX);
+            extract_source_lines(&html, start, end)
+        });
+        let text = text.map(|text| truncate(text, params.max_bytes));
+
+        Ok(to_json(&serde_json::json!({
+            "id": params.id,
+            "file": source.file,
+            "path": path.to_string_lossy(),
+            "line_start": source.line_start,
+            "line_end": source.line_end,
+            "text": text,
+            "note": if text.is_none() { "无法从源码页提取文本，仅返回路径与行号" } else { "" },
+        })))
+    }
+
+    /// `get_item_json` 的同步实现。
+    fn get_item_json_blocking(&self, params: ItemParams) -> Result<String, String> {
+        let index = self.index();
+        let summary = index
+            .find(&params.id)
+            .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
+        let item = self.load_item(summary)?;
+
+        let sections: Vec<serde_json::Value> = item
+            .sections
+            .iter()
+            .map(|section| {
+                serde_json::json!({
+                    "id": section.id,
+                    "title": section.title,
+                    "body_md": section.body_md,
+                })
+            })
+            .collect();
+        let members: Vec<serde_json::Value> = item
+            .members
+            .iter()
+            .map(|member| {
+                serde_json::json!({
+                    "id": member.id.0,
+                    "kind": member.kind,
+                    "name": member.name,
+                    "has_docs": member.docs_md.is_some(),
+                })
+            })
+            .collect();
+
+        Ok(to_json(&serde_json::json!({
+            "id": item.id.0,
+            "kind": item.kind,
+            "name": item.name,
+            "path": item.path,
+            "signature": item.signature,
+            "docs_md": item.docs_md,
+            "source": item.source,
+            "sections": sections,
+            "members": members,
+        })))
+    }
+
+    /// `index_status` 的同步实现。
+    fn index_status_blocking(&self) -> Result<String, String> {
+        let building = self.building.load(Ordering::Relaxed);
+        let meta_path = self.out_dir.join("meta.json");
+        let stale = is_stale(&self.doc_dir, &meta_path).unwrap_or(true);
+        let index = self.index();
+        Ok(to_json(&serde_json::json!({
+            "ready": *self.ready.borrow(),
+            "building": building,
+            "schema_version": index.schema_version,
+            "rustdoc_version": index.rustdoc_version,
+            "crate_count": index.crates.len(),
+            "item_count": index.items.len(),
+            "granularity": index.granularity,
+            "doc_dir": self.doc_dir.to_string_lossy(),
+            "out_dir": self.out_dir.to_string_lossy(),
+            "generated_at": index.generated_at,
+            "stale": stale,
+        })))
+    }
+
+    /// `module_tree` 的同步实现。
+    fn module_tree_blocking(&self, params: ModuleTreeParams) -> Result<String, String> {
+        let index = self.index();
+        let tree = module_tree(&index.items, &params.crate_name)
+            .ok_or_else(|| format!("未找到 crate `{}`", params.crate_name))?;
+        serde_json::to_string(&tree).map_err(|err| format!("序列化失败：{err}"))
+    }
+
+    /// `get_related_items` 的同步实现。
+    fn get_related_items_blocking(&self, params: RelatedItemsParams) -> Result<String, String> {
+        let index = self.index();
+        let id = index
+            .find(&params.id)
+            .map(|summary| summary.id.0.clone())
+            .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
+        let related =
+            related_items(&index.items, &id).ok_or_else(|| format!("未找到条目 `{id}`"))?;
+
+        Ok(to_json(&serde_json::json!({
+            "id": id,
+            "parent": related.parent.as_ref().map(summary_json),
+            "siblings": related.siblings.iter().map(summary_json).collect::<Vec<_>>(),
+            "children": related.children.iter().map(summary_json).collect::<Vec<_>>(),
+        })))
+    }
+
+    /// `get_trait_implementors` 的同步实现。
+    fn get_trait_implementors_blocking(&self, params: ItemParams) -> Result<String, String> {
+        let index = self.index();
+        let summary = index
+            .find(&params.id)
+            .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
+        if !matches!(summary.kind, ItemKind::Trait | ItemKind::TraitAlias) {
+            return Err(format!(
+                "`{}` 不是 trait（kind={:?}）",
+                summary.id.0, summary.kind
+            ));
+        }
+
+        let rel = trait_impl_rel_path(Path::new(&summary.html_path));
+        let path = self.doc_dir.join(&rel);
+        let impls = fs::read_to_string(&path)
+            .map(|js| parse_trait_impls(&js))
+            .unwrap_or_default();
+        let implementors: Vec<serde_json::Value> = impls
+            .iter()
+            .map(|imp| serde_json::json!({ "crate": imp.crate_name, "impl": imp.text }))
+            .collect();
+
+        Ok(to_json(&serde_json::json!({
+            "id": summary.id.0,
+            "count": implementors.len(),
+            "implementors": implementors,
+            "note": if implementors.is_empty() {
+                "未找到实现者（可能确实无实现，或产物缺少 trait.impl 文件）"
+            } else {
+                ""
+            },
+        })))
+    }
+
+    /// `find_by_signature` 的同步实现。
+    fn find_by_signature_blocking(&self, params: FindBySignatureParams) -> Result<String, String> {
+        let index = self.index();
+        let needle = params.pattern.trim().to_lowercase();
+        if needle.is_empty() {
+            return Ok(to_json(&serde_json::json!({ "total": 0, "hits": [] })));
+        }
+        let kind = params.kind.as_deref().map(parse_kind).transpose()?;
+        let limit = params.limit.unwrap_or(20);
+
+        let mut hits = Vec::new();
+        for item in index
+            .items
+            .iter()
+            .filter(|item| matches_crate(item, params.crate_name.as_deref()))
+            .filter(|item| kind.is_none_or(|wanted| item.kind == wanted))
+        {
+            let Some(signature) = &item.signature else {
+                continue;
+            };
+            if contains_ignore_ascii_case(signature, &needle) {
+                hits.push(summary_json(item));
+                if hits.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(to_json(&serde_json::json!({
+            "pattern": params.pattern,
+            "returned": hits.len(),
+            "hits": hits,
+        })))
+    }
+
+    /// `search_docs` 的同步实现（方案 a：扫描已导出的 markdown 正文）。
+    fn search_docs_blocking(&self, params: SearchDocsParams) -> Result<String, String> {
+        let index = self.index();
+        let needle = params.query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Ok(to_json(&serde_json::json!({ "returned": 0, "hits": [] })));
+        }
+        let kind = params.kind.as_deref().map(parse_kind).transpose()?;
+        let limit = params.limit.unwrap_or(20);
+        let offset = params.offset.unwrap_or(0);
+
+        let mut seen = std::collections::HashSet::new();
+        let mut matched = 0usize;
+        let mut hits = Vec::new();
+        for item in index
+            .items
+            .iter()
+            .filter(|item| !item.file.is_empty())
+            .filter(|item| matches_crate(item, params.crate_name.as_deref()))
+            .filter(|item| kind.is_none_or(|wanted| item.kind == wanted))
+        {
+            // 条目粒度下多个条目共享同一文件，按文件去重避免重复扫描。
+            if !seen.insert(item.file.as_str()) {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(self.out_dir.join(&item.file)) else {
+                continue;
+            };
+            let Some(snippet) = snippet_around(&text, &needle) else {
+                continue;
+            };
+            matched += 1;
+            if matched <= offset {
+                continue;
+            }
+            hits.push(serde_json::json!({
+                "file": item.file,
+                "id": item.id.0,
+                "snippet": snippet,
+            }));
+            if hits.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(to_json(&serde_json::json!({
+            "query": params.query,
+            "offset": offset,
+            "returned": hits.len(),
+            "hits": hits,
         })))
     }
 }
@@ -681,6 +1266,41 @@ fn query_param(query: &str, key: &str) -> Option<usize> {
         .and_then(|(_, value)| value.parse().ok())
 }
 
+/// ASCII 大小写不敏感的子串匹配（`needle` 需已小写）。
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    let hay = haystack.as_bytes();
+    let target = needle.as_bytes();
+    target.is_empty()
+        || (target.len() <= hay.len()
+            && hay
+                .windows(target.len())
+                .any(|window| window.eq_ignore_ascii_case(target)))
+}
+
+/// 取 `needle` 命中处前后各 40 字符的上下文片段（按字符边界）。
+fn snippet_around(text: &str, needle: &str) -> Option<String> {
+    const WINDOW: usize = 40;
+    let lower = text.to_lowercase();
+    let mut pos = lower.find(needle)?.min(text.len());
+    while pos > 0 && !text.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let center = text[..pos].chars().count().min(chars.len());
+    let start = center.saturating_sub(WINDOW);
+    let end = (center + WINDOW).min(chars.len());
+
+    let mut out = String::new();
+    if start > 0 {
+        out.push('…');
+    }
+    out.extend(chars[start..end].iter().copied());
+    if end < chars.len() {
+        out.push('…');
+    }
+    Some(out)
+}
+
 /// 序列化为紧凑 JSON 文本。
 ///
 /// 工具结果是给模型读的结构化数据，缩进空白只增加 token 成本、不增信息量。
@@ -753,6 +1373,7 @@ mod tests {
             name: "x".to_string(),
             path: path.iter().map(|segment| (*segment).to_string()).collect(),
             one_line: String::new(),
+            signature: None,
             has_docs: false,
             has_members: false,
             file: String::new(),
@@ -789,5 +1410,87 @@ mod tests {
         assert_eq!(query_param("offset=10&limit=5", "limit"), Some(5));
         assert_eq!(query_param("offset=x", "offset"), None);
         assert_eq!(query_param("", "offset"), None);
+    }
+
+    /// 构建带索引与 markdown 的服务，供工具测试。
+    fn server_with_index() -> (DocsServer, tempfile::TempDir) {
+        let doc_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../mcp-docs-core/tests/fixtures/doc_probe");
+        let out = tempfile::tempdir().unwrap();
+        build(
+            &doc_dir,
+            out.path(),
+            &BuildOptions {
+                persist: true,
+                write_markdown: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let server = DocsServer::new(doc_dir, out.path().to_path_buf()).unwrap();
+        (server, out)
+    }
+
+    /// `index_status` 暴露 schema / 计数 / 粒度。
+    #[tokio::test]
+    async fn index_status_reports_counts() {
+        let (server, _out) = server_with_index();
+        server.ensure_ready().await;
+        let text = server.index_status_blocking().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["schema_version"], INDEX_SCHEMA_VERSION);
+        assert!(value["item_count"].as_u64().unwrap() > 0);
+        assert_eq!(value["granularity"], "member");
+        assert_eq!(value["ready"], true);
+    }
+
+    /// `batch_get_items` 对 ids 数量设上限。
+    #[tokio::test]
+    async fn batch_get_items_caps_ids() {
+        let (server, _out) = server_with_index();
+        server.ensure_ready().await;
+        let ids = vec!["doc_probe::struct.Demo".to_string(); 25];
+        let text = server
+            .batch_get_items_blocking(BatchGetItemsParams {
+                ids,
+                max_bytes_each: None,
+            })
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["returned"], 20);
+        assert_eq!(value["truncated"], true);
+    }
+
+    /// `get_examples` 至少返回签名围栏块。
+    #[tokio::test]
+    async fn get_examples_returns_code() {
+        let (server, _out) = server_with_index();
+        server.ensure_ready().await;
+        let text = server
+            .get_examples_blocking(GetExamplesParams {
+                id: "doc_probe::struct.Demo".to_string(),
+                max_examples: None,
+                max_bytes: None,
+            })
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(value["returned"].as_u64().unwrap() >= 1);
+    }
+
+    /// `find_by_signature` 能按签名子串命中。
+    #[tokio::test]
+    async fn find_by_signature_matches() {
+        let (server, _out) = server_with_index();
+        server.ensure_ready().await;
+        let text = server
+            .find_by_signature_blocking(FindBySignatureParams {
+                pattern: "struct Demo".to_string(),
+                crate_name: None,
+                kind: None,
+                limit: None,
+            })
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(value["returned"].as_u64().unwrap() >= 1);
     }
 }

@@ -11,6 +11,7 @@ mod link;
 mod lookup;
 mod markdown;
 mod model;
+mod nav;
 mod parse;
 mod search;
 mod sidebar;
@@ -25,13 +26,20 @@ pub use error::{Error, Result};
 pub use index::{build, build_index, load_index, write_index, BuildOptions, BuildReport};
 pub use link::{html_to_md_relpath, resolve_href, Resolved};
 pub use lookup::IdIndex;
-pub use markdown::{render_item, render_member_item, rewrite_links, LinkStyle, RenderOptions};
+pub use markdown::{
+    extract_code_blocks, render_item, render_member_item, rewrite_links, LinkStyle, RenderOptions,
+};
 pub use model::{
     CrateSummary, DiscoveredItem, DocItem, Granularity, Index, ItemId, ItemKind, ItemSummary,
     Section, SourceRef, INDEX_SCHEMA_VERSION,
 };
+pub use nav::{
+    module_tree, parse_trait_impls, related_items, trait_impl_rel_path, ModuleNode, RelatedItems,
+    TraitImpl,
+};
 pub use parse::{
-    parse_item_html, parse_one_line, parse_rustdoc_meta, path_to_identity, ParseOptions,
+    extract_source_lines, parse_item_html, parse_one_line, parse_rustdoc_meta, path_to_identity,
+    ParseOptions,
 };
 pub use search::{search, search_page, MatchMode, SearchHit, SearchOutcome, SearchQuery};
 pub use sidebar::{parse_sidebar_file, parse_sidebar_str};

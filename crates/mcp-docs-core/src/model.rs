@@ -281,6 +281,9 @@ pub struct ItemSummary {
     pub path: Vec<String>,
     /// 一行摘要（页面 meta，成员取文档首行）。
     pub one_line: String,
+    /// 声明签名（可能是长签名，供 `find_by_signature` 用）。
+    #[serde(default)]
+    pub signature: Option<String>,
     /// 是否有文档。
     pub has_docs: bool,
     /// 是否有成员。
@@ -354,4 +357,5 @@ pub struct Index {
 /// - 3：`one_line` 摘要里的链接重写为 `.md`，源码路径归一化为相对 `doc_root`。
 /// - 4：无真实文档的条目不再返回 rustdoc 占位摘要。
 /// - 5：新增导出粒度 `granularity`；发现阶段启用 `all.html` 交叉校验兜底。
-pub const INDEX_SCHEMA_VERSION: u32 = 5;
+/// - 6：`ItemSummary` 新增 `signature`，供 `find_by_signature` 按签名检索。
+pub const INDEX_SCHEMA_VERSION: u32 = 6;
