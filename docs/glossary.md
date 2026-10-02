@@ -68,7 +68,10 @@
 | #3.14 | server 模块 | MCP 工具与资源实现 | `crates/mcp-docs-server/src/server.rs` |
 | #3.15 | kind 参数、类型过滤 | 条目类型名的用户输入解析（前缀 / 复数 / 自然名） | `model.rs::ItemKind::parse_input`；`server.rs::parse_kind` |
 | #3.16 | 源码位置、source | 条目对应的源码文件与行号 | `parse.rs::parse_source_href`；MCP `get_item_source` |
-| #3.17 | 条目查找、find_summary | 按 id 找条目（精确优先，允许省略类型标记） | `server.rs::find_summary` |
+| #3.17 | 条目查找、IdIndex | 按 id 找条目（精确优先，允许省略类型标记）的预建查找表 | `lookup.rs::IdIndex`；`server.rs::Loaded::find` |
 | #3.18 | 一行摘要、one_line | 索引里的简要描述，仅在有真实文档时生成 | `index.rs`（见 `lessons.md` #1.25） |
 | #3.19 | 分页、offset | 检索 / 列表跳过的命中数；`total` 为分页前总数 | `search.rs::SearchQuery::offset`、`search_page` |
 | #3.20 | allpage 模块 | 解析 `all.html`，补全 sidebar 遗漏的条目 | `crates/mcp-docs-core/src/allpage.rs` |
+| #3.21 | 检索片段、snippet | 结果页条目摘要命中时的 ±40 字符上下文 | `search.rs::SearchHit::snippet` |
+| #3.22 | 并行构建 | rayon 并行解析 / 渲染 / 落盘，串行汇总计数 | `index.rs::build` |
+| #3.23 | 解析缓存、DocCache | 按需解析结果缓存，带容量上限与近似 LRU | `cache.rs::DocCache` |

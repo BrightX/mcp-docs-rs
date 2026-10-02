@@ -240,3 +240,17 @@
 **错**：只写 `use rmcp::schemars::JsonSchema;`，编译报 `cannot find module or crate schemars`。
 **对**：derive 展开后会引用 `schemars::...` 绝对路径，需把模块名也引入：`use rmcp::schemars::{self, JsonSchema};`（或直接在 Cargo.toml 加 `schemars` 依赖）。rmcp 已 re-export `schemars`，无需重复添加依赖。
 **相关**：`crates/mcp-docs-server/src/server.rs`
+
+### #5.5 `macro_rules!` 定义位置与规则必须覆盖调用形态
+
+**错**：把 `selector!` 宏定义放在文件末尾（原 `selector` 函数的位置），并在规则里只写 `($css:expr)`。
+**对**：两处都会编译失败。
+- `macro_rules!` 是**文本作用域**，必须在首次使用之前定义，否则报 `cannot find macro`；把定义移到文件顶部（导入之后）即可。
+- 原调用点形如 `main.select(&selector("a, b",))`（属性宏改写后留下尾随逗号），而 `($css:expr)` 不接受尾随 `,`，报 `no rules expected ','`；规则写成 `($css:expr $(,)?)` 兼容。
+**相关**：`crates/mcp-docs-core/src/parse.rs`
+
+### #5.6 rayon 并行迭代要能收集 `Result`
+
+**错**：把 `par_iter().map(process_entry)` 的结果直接 `collect::<Vec<_>>()`，而 `process_entry` 返回 `Result<ProcessResult>`，导致类型不匹配。
+**对**：rayon 为 `Result` 实现了 `FromParallelIterator`，直接 `collect::<Result<Vec<_>>>()?` 即可在并行中短路错误。注意 indexed 并行迭代的 `collect` **保持原顺序**，据此可保证条目顺序与旧串行实现逐字节一致。
+**相关**：`crates/mcp-docs-core/src/index.rs::build`

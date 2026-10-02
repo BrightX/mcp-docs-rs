@@ -6,7 +6,7 @@
 |---|---|
 | [requirements.md](requirements.md) | 需求：背景、目标、用户场景、功能/非功能需求、约束与非目标 |
 | [design.md](design.md) | 设计：工程结构、数据模型、解析算法、存储布局、缓存、MCP 接口、测试策略、风险 |
-| [roadmap.md](roadmap.md) | 进度计划与里程碑（M0–M6），含各阶段验收标准与状态 |
+| [roadmap.md](roadmap.md) | 进度计划与里程碑（M0–M9），含各阶段验收标准与状态 |
 | [conventions.md](conventions.md) | 开发规范：代码质量、代码风格、注释规范、提交规范、工作流 |
 | [lessons.md](lessons.md) | 错题集：分章节记录踩过的坑，编号 `#x.y` |
 | [glossary.md](glossary.md) | 术语与代码位置对照：分章节记录术语 / 别名 → 代码位置 |

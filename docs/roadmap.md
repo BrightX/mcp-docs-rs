@@ -13,6 +13,7 @@
 | M6 | 打磨与真实规模验证 | ✅ 已完成 |
 | M7 | 遗留特性补齐（分页 / 导出粒度 / all.html 兜底） | ✅ 已完成 |
 | M8 | 冷启动不阻塞 | ✅ 已完成 |
+| M9 | 性能优化（并行构建 / 检索 / 缓存 / 资源分页） | ✅ 已完成 |
 
 状态标记：⬜ 未开始 / 🟡 进行中 / ✅ 已完成 / ⛔ 阻塞。
 
@@ -164,6 +165,34 @@
 - 全新 out 目录（需全量构建）下 `initialize` **11 ms** 返回；工具调用在后台构建完成前保持等待，完成后返回真实数据（fixture 路径下 43 ms 返回 1 个 crate）。
 - 已有索引时初始即就绪、无需等待。
 - 服务端新增 2 个测试覆盖上述两条路径；`cargo test` 全绿、clippy 无警告。
+
+## M9 — 性能优化
+
+**交付物**
+- **速赢**：
+  - 工具输出改紧凑 JSON（`to_string_pretty` → `to_string`），省 token。
+  - core 新增 `lookup.rs::IdIndex`（精确 / 去类型标记两表），server 以 `Loaded{index,ids}`
+    持有索引并在加载/刷新/重建时预建查找表；删除每查一条就线性扫描的 `find_summary`。
+  - 修复模块过滤按整段匹配（`in` 不再误配 `inner`，lessons #4.1）。
+  - `parse.rs` 内置 CSS 选择器用 `selector!` 宏 + `OnceLock` 预编译缓存。
+  - 导出时输出路径只推导一次。
+  - 工具（`list_items` / `search_items` / `get_item` / `get_item_source`）的 CPU / IO
+    工作移入 `spawn_blocking`，不阻塞 async 执行器。
+  - `DocCache` 加容量上限（默认 512）+ 近似 LRU（访问计数时间戳），并提供 `with_capacity`。
+- **结构性**：`rayon` 并行构建索引（发现串行保序 → 解析/渲染/落盘并行 → 汇总串行）；
+  `search` 只克隆当前页并改免分配的大小写不敏感匹配；`index.json` / `meta.json` 紧凑落盘；
+  派生 markdown 走 `atomic_write_fast`（跳过 fsync，`index.json`/`meta.json` 仍 fsync）。
+- **检索增强**：多词 AND（各词得分之和）；`SearchHit.snippet`（摘要命中取 ±40 字符窗口）；
+  crate 资源分页 `rustdoc://{crate}?offset=N&limit=M`（limit 上限 500）+ 新增该资源模板。
+- **基准**：`crates/mcp-docs-core/benches/{parse_item_html,search,build}.rs`（`harness=false`，
+  criterion）；`build` 默认跑 fixture，真实规模用 `MCP_DOCS_BENCH_DOC` 门控。
+
+**验收标准**
+- `cargo fmt` / `clippy --workspace --all-targets -- -D warnings` / `cargo test --workspace` 全绿。
+- 单关键词检索分数语义（100/80/60/40/20）与排序三级键逐字节不变（现有测试为红线）。
+- 多词查询要求每词都命中；摘要命中附带 snippet。
+- `DocCache` 超容量后淘汰最久未访问条目。
+- 三个 criterion 基准可运行。
 
 ## 工作约定
 
