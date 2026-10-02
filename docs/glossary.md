@@ -75,3 +75,9 @@
 | #3.21 | 检索片段、snippet | 结果页条目摘要命中时的 ±40 字符上下文 | `search.rs::SearchHit::snippet` |
 | #3.22 | 并行构建 | rayon 并行解析 / 渲染 / 落盘，串行汇总计数 | `index.rs::build` |
 | #3.23 | 解析缓存、DocCache | 按需解析结果缓存，带容量上限与近似 LRU | `cache.rs::DocCache` |
+| #3.24 | 模块树、module_tree | 由 `path` + `Module` 构建的嵌套树（每级条目数） | `nav.rs::module_tree` |
+| #3.25 | 相关条目、related_items | 父条目 / 同模块兄弟 / 子成员 | `nav.rs::related_items` |
+| #3.26 | trait 实现者 | 解析 `trait.impl/.../trait.*.js` | `nav.rs::parse_trait_impls`、`trait_impl_rel_path` |
+| #3.27 | 源码文本、get_source_text | 按行号从 `src/*.rs.html` 切片 | `parse.rs::extract_source_lines` |
+| #3.28 | 示例抽取、get_examples | 抽取 markdown 里的 ```rust 围栏块 | `markdown.rs::extract_code_blocks` |
+| #3.29 | 签名、signature | 索引里的声明签名，供 find_by_signature | `model.rs::ItemSummary::signature` |

@@ -11,7 +11,7 @@
 - **降噪**：剥离 rustdoc 的 UI 噪声、`§` 锚点、blanket / synthetic impl；代码块补 `rust` 语言标注。
 - **可检索**：按名字 / 路径 / 摘要检索并给出相关度得分，支持按 crate 与类型过滤。
 - **增量**：基于产物指纹与文件 mtime，只重建变化的部分。
-- **MCP 服务**：6 个工具 + `rustdoc://` 资源，stdio 传输，按需解析并缓存。
+- **MCP 服务**：17 个工具 + `rustdoc://` 资源，stdio 传输，按需解析并缓存。
 
 ## 快速开始
 
@@ -52,9 +52,20 @@ cargo run -p mcp-docs-server -- --doc-dir target/doc --out-dir target/doc-search
 | `search_items` | 检索条目，返回轻量摘要与得分（支持 `offset` 分页） |
 | `get_item` | 读取条目的完整 markdown |
 | `get_item_source` | 查询条目的源码位置 |
+| `get_examples` | 抽取条目文档里的 rust 代码示例 |
+| `get_item_section` | 返回条目某个分节（如 `examples` / `panics`）的 markdown |
+| `batch_get_items` | 批量读取多个条目（ids 上限 20） |
+| `get_source_text` | 按源码位置读取源码文本（失败时回退为路径与行号） |
+| `get_item_json` | 返回条目的结构化 JSON |
+| `index_status` | 返回索引状态（就绪 / 构建中 / schema / 版本 / 计数 / 是否过期） |
+| `module_tree` | 返回 crate 的模块树（含每级条目数） |
+| `get_related_items` | 返回条目的父条目、兄弟与子成员 |
+| `get_trait_implementors` | 列出实现了某个 trait 的类型 |
+| `find_by_signature` | 按签名子串（如 `-> Result<`）检索 |
+| `search_docs` | 在已导出的 markdown 正文里全文检索 |
 | `rebuild_index` | 重建索引（默认增量） |
 
-资源：`rustdoc://crates`、`rustdoc://{crate}`、`rustdoc://{crate}/{item}`。
+资源：`rustdoc://crates`、`rustdoc://{crate}`（支持 `?offset=&limit=` 分页）、`rustdoc://{crate}/{item}`。
 
 冷启动不阻塞：`initialize` 立即返回；首次的索引构建在后台进行，工具/资源会等待就绪后再返回（已有索引则直接服务、后台按需刷新）。
 

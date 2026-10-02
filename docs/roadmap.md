@@ -14,6 +14,7 @@
 | M7 | 遗留特性补齐（分页 / 导出粒度 / all.html 兜底） | ✅ 已完成 |
 | M8 | 冷启动不阻塞 | ✅ 已完成 |
 | M9 | 性能优化（并行构建 / 检索 / 缓存 / 资源分页） | ✅ 已完成 |
+| M10 | MCP 工具扩展（工具已落地；协议能力进行中） | 🟡 进行中 |
 
 状态标记：⬜ 未开始 / 🟡 进行中 / ✅ 已完成 / ⛔ 阻塞。
 
@@ -193,6 +194,54 @@
 - 多词查询要求每词都命中；摘要命中附带 snippet。
 - `DocCache` 超容量后淘汰最久未访问条目。
 - 三个 criterion 基准可运行。
+
+## M10 — MCP 工具扩展
+
+状态：🟡 工具已落地；协议能力（结构化输出 / prompts / 通知）待续。
+
+### 已完成
+
+**读取类增强**
+- `get_examples {id, max_examples?, max_bytes?}`：渲染条目 markdown 后抽取 ```rust 围栏块。
+- `get_item_section {id, section}`：按分节 id / 标题返回该节 markdown 与成员；未命中列出可用分节。
+- `batch_get_items {ids[], max_bytes_each?}`：批量读取（ids 上限 20）。
+- `get_source_text {id, max_bytes?}`：由 `SourceRef` 定位 `src/.../*.rs.html` 并按行号切片；
+  取不到时回退为「仅返回路径与行号」。
+
+**结构化与元信息**
+- `get_item_json {id}`：`id/kind/name/path/signature/docs_md/source/sections/members`。
+- `index_status`：`ready/building/schema_version/rustdoc_version/crate_count/item_count/granularity/
+  doc_dir/out_dir/generated_at/stale`。
+
+**导航与关系**
+- `module_tree {crate}`：由 `path` + `ItemKind::Module` 构建嵌套树（每级条目数）。
+- `get_related_items {id}`：父条目 + 同模块兄弟 + 子成员。
+- `get_trait_implementors {id}`：读 `trait.impl/<crate>/.../trait.<Name>.js` 解析实现者。
+
+**检索大件**
+- `find_by_signature {pattern, crate?, kind?, limit?}`：按签名子串检索（`ItemSummary.signature`）。
+- `search_docs {query, crate?, kind?, limit?, offset?}`：方案 a（扫导出 markdown 正文）。
+
+**core 支撑**
+- `nav.rs`：`module_tree` / `related_items` / `parse_trait_impls` / `trait_impl_rel_path`。
+- `markdown.rs::extract_code_blocks`、`parse.rs::extract_source_lines`。
+- `ItemSummary` 新增 `signature`，`INDEX_SCHEMA_VERSION` 5 → 6。
+
+### 待续（协议能力，rmcp 3.5）
+
+- **结构化输出**：`get_item_json` / `index_status` / `module_tree` / `search_items` 改用
+  `rmcp::Json<T>` 包装（自动带 `outputSchema` + `structured_content`），并保留文本内容兼容旧客户端。
+- **prompts 模板**：`enable_prompts()` + `#[prompt_router]` / `#[prompt_handler]`，提供
+  「解释这个 API 的用法」「给出调用示例」等模板（入参 `item id`）。
+- **构建进度 / 资源变更通知**：`enable_logging()` + `enable_resources_list_changed()`，后台构建
+  开始 / 结束时经 `Peer` 发通知。
+
+### 研究结论
+
+- `src/*.rs.html` 结构：`pre.rust code` + 每行 `<a id="N">N</a>` 行号锚点 → 已验证，见
+  `parse.rs::extract_source_lines`。
+- `trait.impl/<crate>/<mod>/trait.<Name>.js`：`Object.fromEntries([["crate",[["impl ...",0]]]])` →
+  已验证，见 `nav.rs::parse_trait_impls`。
 
 ## 工作约定
 

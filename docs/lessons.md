@@ -254,3 +254,9 @@
 **错**：把 `par_iter().map(process_entry)` 的结果直接 `collect::<Vec<_>>()`，而 `process_entry` 返回 `Result<ProcessResult>`，导致类型不匹配。
 **对**：rayon 为 `Result` 实现了 `FromParallelIterator`，直接 `collect::<Result<Vec<_>>>()?` 即可在并行中短路错误。注意 indexed 并行迭代的 `collect` **保持原顺序**，据此可保证条目顺序与旧串行实现逐字节一致。
 **相关**：`crates/mcp-docs-core/src/index.rs::build`
+
+### #5.7 测试里内嵌 HTML 别用 `r#"..."#`
+
+**错**：写 `r#"<a href="#1">1</a>"#` 时，字符串里的 `"#`（`href="#1"`）会被当成原始字符串的结束符，编译器报 `expected one of ... found '1'`。
+**对**：改用 `r##"..."##`（井号数量大于内容中出现的连续井号数）。凡是内嵌 HTML（含 `href="#..."`）或含 `"#` 序列的文本都要注意。
+**相关**：`crates/mcp-docs-core/tests/extras.rs`
