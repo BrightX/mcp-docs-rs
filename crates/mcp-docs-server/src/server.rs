@@ -17,7 +17,9 @@ use rmcp::model::{
 };
 use rmcp::schemars::{self, JsonSchema};
 use rmcp::service::RequestContext;
-use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler};
+use rmcp::{
+    tool, tool_handler, tool_router, ErrorData as McpError, Json, RoleServer, ServerHandler,
+};
 use tokio::sync::watch;
 
 use mcp_docs_core::MatchMode;
@@ -160,6 +162,125 @@ struct SearchDocsParams {
     limit: Option<usize>,
     /// 跳过的命中数（分页）。
     offset: Option<usize>,
+}
+
+/// 结构化输出用的条目摘要。
+#[derive(Debug, serde::Serialize, JsonSchema)]
+struct SummaryOutput {
+    id: String,
+    kind: String,
+    name: String,
+    path: Vec<String>,
+    one_line: String,
+    has_docs: bool,
+    has_members: bool,
+    file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    score: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snippet: Option<String>,
+}
+
+impl SummaryOutput {
+    /// 由条目摘要构造（不含检索得分）。
+    fn from_summary(item: &ItemSummary) -> Self {
+        Self {
+            id: item.id.0.clone(),
+            kind: kind_name(item.kind),
+            name: item.name.clone(),
+            path: item.path.clone(),
+            one_line: item.one_line.clone(),
+            has_docs: item.has_docs,
+            has_members: item.has_members,
+            file: item.file.clone(),
+            score: None,
+            snippet: None,
+        }
+    }
+}
+
+/// `search_items` 的结构化返回。
+#[derive(Debug, serde::Serialize, JsonSchema)]
+struct SearchItemsResponse {
+    total: usize,
+    offset: usize,
+    returned: usize,
+    hits: Vec<SummaryOutput>,
+}
+
+/// `get_item_json` 的结构化返回。
+#[derive(Debug, serde::Serialize, JsonSchema)]
+struct ItemDetailOutput {
+    id: String,
+    kind: String,
+    name: String,
+    path: Vec<String>,
+    signature: Option<String>,
+    docs_md: Option<String>,
+    source: Option<SourceOutput>,
+    sections: Vec<SectionOutput>,
+    members: Vec<MemberOutput>,
+}
+
+/// 源码位置的结构化表示。
+#[derive(Debug, serde::Serialize, JsonSchema)]
+struct SourceOutput {
+    file: String,
+    line_start: Option<u32>,
+    line_end: Option<u32>,
+}
+
+/// 分节的结构化表示。
+#[derive(Debug, serde::Serialize, JsonSchema)]
+struct SectionOutput {
+    id: String,
+    title: String,
+    body_md: String,
+}
+
+/// 成员的结构化表示。
+#[derive(Debug, serde::Serialize, JsonSchema)]
+struct MemberOutput {
+    id: String,
+    kind: String,
+    name: String,
+    has_docs: bool,
+}
+
+/// `index_status` 的结构化返回。
+#[derive(Debug, serde::Serialize, JsonSchema)]
+struct IndexStatusOutput {
+    ready: bool,
+    building: bool,
+    schema_version: u32,
+    rustdoc_version: Option<String>,
+    crate_count: usize,
+    item_count: usize,
+    granularity: String,
+    doc_dir: String,
+    out_dir: String,
+    generated_at: u64,
+    stale: bool,
+}
+
+/// `module_tree` 的结构化返回节点。
+#[derive(Debug, serde::Serialize, JsonSchema)]
+struct ModuleTreeNode {
+    name: String,
+    path: String,
+    item_count: usize,
+    children: Vec<ModuleTreeNode>,
+}
+
+impl From<mcp_docs_core::ModuleNode> for ModuleTreeNode {
+    fn from(node: mcp_docs_core::ModuleNode) -> Self {
+        Self {
+            name: node.name,
+            path: node.path,
+            item_count: node.item_count,
+            children: node.children.into_iter().map(Self::from).collect(),
+        }
+    }
 }
 
 /// 已加载的索引，附带预建的 id 查找表。
@@ -334,12 +455,13 @@ impl DocsServer {
     async fn search_items(
         &self,
         Parameters(params): Parameters<SearchItemsParams>,
-    ) -> Result<String, String> {
+    ) -> Result<Json<SearchItemsResponse>, String> {
         self.ensure_ready().await;
         let server = self.clone();
-        tokio::task::spawn_blocking(move || server.search_items_blocking(params))
+        let value = tokio::task::spawn_blocking(move || server.search_items_blocking(params))
             .await
-            .map_err(|err| format!("检索任务失败：{err}"))?
+            .map_err(|err| format!("检索任务失败：{err}"))??;
+        Ok(Json(value))
     }
 
     /// 读取条目的完整 markdown。
@@ -424,21 +546,23 @@ impl DocsServer {
     async fn get_item_json(
         &self,
         Parameters(params): Parameters<ItemParams>,
-    ) -> Result<String, String> {
+    ) -> Result<Json<ItemDetailOutput>, String> {
         self.ensure_ready().await;
         let server = self.clone();
-        tokio::task::spawn_blocking(move || server.get_item_json_blocking(params))
+        let value = tokio::task::spawn_blocking(move || server.get_item_json_blocking(params))
             .await
-            .map_err(|err| format!("读取结构化条目任务失败：{err}"))?
+            .map_err(|err| format!("读取结构化条目任务失败：{err}"))??;
+        Ok(Json(value))
     }
 
     /// 返回索引状态。
     #[tool(description = "返回索引状态：就绪 / 构建中 / schema / 版本 / 计数 / 是否过期")]
-    async fn index_status(&self) -> Result<String, String> {
+    async fn index_status(&self) -> Result<Json<IndexStatusOutput>, String> {
         let server = self.clone();
-        tokio::task::spawn_blocking(move || server.index_status_blocking())
+        let value = tokio::task::spawn_blocking(move || server.index_status_blocking())
             .await
-            .map_err(|err| format!("读取索引状态任务失败：{err}"))?
+            .map_err(|err| format!("读取索引状态任务失败：{err}"))??;
+        Ok(Json(value))
     }
 
     /// 返回 crate 的模块树。
@@ -446,12 +570,13 @@ impl DocsServer {
     async fn module_tree(
         &self,
         Parameters(params): Parameters<ModuleTreeParams>,
-    ) -> Result<String, String> {
+    ) -> Result<Json<ModuleTreeNode>, String> {
         self.ensure_ready().await;
         let server = self.clone();
-        tokio::task::spawn_blocking(move || server.module_tree_blocking(params))
+        let value = tokio::task::spawn_blocking(move || server.module_tree_blocking(params))
             .await
-            .map_err(|err| format!("构建模块树任务失败：{err}"))?
+            .map_err(|err| format!("构建模块树任务失败：{err}"))??;
+        Ok(Json(value))
     }
 
     /// 返回条目的相关条目。
@@ -593,7 +718,10 @@ impl DocsServer {
     }
 
     /// `search_items` 的同步实现。
-    fn search_items_blocking(&self, params: SearchItemsParams) -> Result<String, String> {
+    fn search_items_blocking(
+        &self,
+        params: SearchItemsParams,
+    ) -> Result<SearchItemsResponse, String> {
         let index = self.index();
         let mut query = SearchQuery::new(params.query);
         query.crate_name = params.crate_name;
@@ -609,25 +737,23 @@ impl DocsServer {
         }
 
         let outcome = search_page(&index, &query);
-        let items: Vec<serde_json::Value> = outcome
+        let hits: Vec<SummaryOutput> = outcome
             .hits
             .iter()
             .map(|hit| {
-                let mut value = summary_json(&hit.item);
-                value["score"] = serde_json::json!(hit.score);
-                if let Some(snippet) = &hit.snippet {
-                    value["snippet"] = serde_json::json!(snippet);
-                }
-                value
+                let mut output = SummaryOutput::from_summary(&hit.item);
+                output.score = Some(hit.score);
+                output.snippet = hit.snippet.clone();
+                output
             })
             .collect();
 
-        Ok(to_json(&serde_json::json!({
-            "total": outcome.total,
-            "offset": query.offset,
-            "returned": items.len(),
-            "hits": items,
-        })))
+        Ok(SearchItemsResponse {
+            total: outcome.total,
+            offset: query.offset,
+            returned: hits.len(),
+            hits,
+        })
     }
 
     /// `get_item` 的同步实现。
@@ -812,77 +938,81 @@ impl DocsServer {
     }
 
     /// `get_item_json` 的同步实现。
-    fn get_item_json_blocking(&self, params: ItemParams) -> Result<String, String> {
+    fn get_item_json_blocking(&self, params: ItemParams) -> Result<ItemDetailOutput, String> {
         let index = self.index();
         let summary = index
             .find(&params.id)
             .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
         let item = self.load_item(summary)?;
 
-        let sections: Vec<serde_json::Value> = item
+        let sections: Vec<SectionOutput> = item
             .sections
             .iter()
-            .map(|section| {
-                serde_json::json!({
-                    "id": section.id,
-                    "title": section.title,
-                    "body_md": section.body_md,
-                })
+            .map(|section| SectionOutput {
+                id: section.id.clone(),
+                title: section.title.clone(),
+                body_md: section.body_md.clone(),
             })
             .collect();
-        let members: Vec<serde_json::Value> = item
+        let members: Vec<MemberOutput> = item
             .members
             .iter()
-            .map(|member| {
-                serde_json::json!({
-                    "id": member.id.0,
-                    "kind": member.kind,
-                    "name": member.name,
-                    "has_docs": member.docs_md.is_some(),
-                })
+            .map(|member| MemberOutput {
+                id: member.id.0.clone(),
+                kind: kind_name(member.kind),
+                name: member.name.clone(),
+                has_docs: member.docs_md.is_some(),
             })
             .collect();
+        let source = item.source.as_ref().map(|source| SourceOutput {
+            file: source.file.clone(),
+            line_start: source.line_start,
+            line_end: source.line_end,
+        });
 
-        Ok(to_json(&serde_json::json!({
-            "id": item.id.0,
-            "kind": item.kind,
-            "name": item.name,
-            "path": item.path,
-            "signature": item.signature,
-            "docs_md": item.docs_md,
-            "source": item.source,
-            "sections": sections,
-            "members": members,
-        })))
+        Ok(ItemDetailOutput {
+            id: item.id.0.clone(),
+            kind: kind_name(item.kind),
+            name: item.name.clone(),
+            path: item.path.clone(),
+            signature: item.signature.clone(),
+            docs_md: item.docs_md.clone(),
+            source,
+            sections,
+            members,
+        })
     }
 
     /// `index_status` 的同步实现。
-    fn index_status_blocking(&self) -> Result<String, String> {
+    fn index_status_blocking(&self) -> Result<IndexStatusOutput, String> {
         let building = self.building.load(Ordering::Relaxed);
         let meta_path = self.out_dir.join("meta.json");
         let stale = is_stale(&self.doc_dir, &meta_path).unwrap_or(true);
         let index = self.index();
-        Ok(to_json(&serde_json::json!({
-            "ready": *self.ready.borrow(),
-            "building": building,
-            "schema_version": index.schema_version,
-            "rustdoc_version": index.rustdoc_version,
-            "crate_count": index.crates.len(),
-            "item_count": index.items.len(),
-            "granularity": index.granularity,
-            "doc_dir": self.doc_dir.to_string_lossy(),
-            "out_dir": self.out_dir.to_string_lossy(),
-            "generated_at": index.generated_at,
-            "stale": stale,
-        })))
+        Ok(IndexStatusOutput {
+            ready: *self.ready.borrow(),
+            building,
+            schema_version: index.schema_version,
+            rustdoc_version: index.rustdoc_version.clone(),
+            crate_count: index.crates.len(),
+            item_count: index.items.len(),
+            granularity: serde_json::to_value(index.granularity)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_default(),
+            doc_dir: self.doc_dir.to_string_lossy().into_owned(),
+            out_dir: self.out_dir.to_string_lossy().into_owned(),
+            generated_at: index.generated_at,
+            stale,
+        })
     }
 
     /// `module_tree` 的同步实现。
-    fn module_tree_blocking(&self, params: ModuleTreeParams) -> Result<String, String> {
+    fn module_tree_blocking(&self, params: ModuleTreeParams) -> Result<ModuleTreeNode, String> {
         let index = self.index();
         let tree = module_tree(&index.items, &params.crate_name)
             .ok_or_else(|| format!("未找到 crate `{}`", params.crate_name))?;
-        serde_json::to_string(&tree).map_err(|err| format!("序列化失败：{err}"))
+        Ok(ModuleTreeNode::from(tree))
     }
 
     /// `get_related_items` 的同步实现。
@@ -1217,6 +1347,14 @@ fn summary_json(item: &ItemSummary) -> serde_json::Value {
     })
 }
 
+/// 条目类型的 serde 名（`snake_case`），供结构化输出使用。
+fn kind_name(kind: ItemKind) -> String {
+    serde_json::to_value(kind)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
 /// 解析 `kind` 参数。
 ///
 /// 无法识别的值直接报错，避免像早先那样静默忽略过滤器、误返回全部类型
@@ -1436,12 +1574,11 @@ mod tests {
     async fn index_status_reports_counts() {
         let (server, _out) = server_with_index();
         server.ensure_ready().await;
-        let text = server.index_status_blocking().unwrap();
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(value["schema_version"], INDEX_SCHEMA_VERSION);
-        assert!(value["item_count"].as_u64().unwrap() > 0);
-        assert_eq!(value["granularity"], "member");
-        assert_eq!(value["ready"], true);
+        let status = server.index_status_blocking().unwrap();
+        assert_eq!(status.schema_version, INDEX_SCHEMA_VERSION);
+        assert!(status.item_count > 0);
+        assert_eq!(status.granularity, "member");
+        assert!(status.ready);
     }
 
     /// `batch_get_items` 对 ids 数量设上限。
