@@ -167,3 +167,39 @@ fn offset_past_end_and_zero_limit_are_empty() {
     zero.limit = 0;
     assert!(search(&index, &zero).is_empty());
 }
+
+#[test]
+fn multi_word_requires_all_terms() {
+    let index = build();
+
+    // 两个词都命中的条目才会返回。
+    let hits = search(&index, &SearchQuery::new("demo struct"));
+    assert!(!hits.is_empty());
+    for hit in &hits {
+        let hay =
+            format!("{} {} {}", hit.item.name, hit.item.id.0, hit.item.one_line).to_lowercase();
+        assert!(
+            hay.contains("demo") && hay.contains("struct"),
+            "多词 AND 不成立：{}",
+            hit.item.id.0
+        );
+    }
+
+    // 含一个不存在的词时无结果。
+    assert!(search(&index, &SearchQuery::new("demo zzzz")).is_empty());
+}
+
+#[test]
+fn snippet_present_on_one_line_hit() {
+    let index = build();
+    let hits = search(&index, &SearchQuery::new("demo struct"));
+    let demo = hits
+        .iter()
+        .find(|hit| hit.item.id.0 == "doc_probe::struct.Demo")
+        .expect("应命中 Demo");
+    let snippet = demo.snippet.as_ref().expect("摘要命中应附带 snippet");
+    assert!(
+        snippet.to_lowercase().contains("demo"),
+        "snippet: {snippet}"
+    );
+}

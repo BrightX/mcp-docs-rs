@@ -12,7 +12,21 @@ thiserror = { workspace = true }
 scraper = { workspace = true }
 htmd = { workspace = true }
 walkdir = { workspace = true }
+rayon = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "parse_item_html"
+harness = false
+
+[[bench]]
+name = "search"
+harness = false
+
+[[bench]]
+name = "build"
+harness = false

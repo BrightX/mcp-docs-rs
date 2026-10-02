@@ -176,6 +176,24 @@ impl ItemKind {
 #[serde(transparent)]
 pub struct ItemId(pub String);
 
+impl ItemId {
+    /// 去掉各段里的类型标记：`rmcp::attr.tool_router` → `rmcp::tool_router`。
+    ///
+    /// 供按省略标记的写法查找条目（如 `get_item("tokio::task::spawn")`）。
+    pub fn without_kind_tags(&self) -> String {
+        self.0
+            .split("::")
+            .map(|segment| {
+                segment
+                    .split_once('.')
+                    .map(|(_, name)| name)
+                    .unwrap_or(segment)
+            })
+            .collect::<Vec<_>>()
+            .join("::")
+    }
+}
+
 impl std::fmt::Display for ItemId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)

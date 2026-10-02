@@ -5,12 +5,24 @@
 //! `h2.section-header`、`section[id^="method."]` 等。
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use scraper::{ElementRef, Html, Node, Selector};
 
 use crate::error::{Error, Result};
 use crate::link::{resolve_href, Resolved};
 use crate::model::{DocItem, ItemId, ItemKind, Section, SourceRef};
+
+/// 解析并缓存内置选择器。
+///
+/// 选择器字面量在每个调用点只编译一次并缓存（`OnceLock`），避免每次解析
+/// 页面都重新编译同一批 CSS。选择器是常量字符串，解析失败属编程错误。
+macro_rules! selector {
+    ($css:expr $(,)?) => {{
+        static CACHE: OnceLock<Selector> = OnceLock::new();
+        CACHE.get_or_init(|| Selector::parse($css).expect("内置选择器应始终合法"))
+    }};
+}
 
 /// 解析选项。
 #[derive(Debug, Clone, Default)]
@@ -33,7 +45,7 @@ pub fn parse_item_html(html: &str, rel_path: &Path, opts: &ParseOptions) -> Resu
 
     let document = Html::parse_document(html);
     let main = document
-        .select(&selector("section#main-content"))
+        .select(selector!("section#main-content"))
         .next()
         .ok_or_else(|| Error::Parse {
             path: rel_path.to_path_buf(),
@@ -41,19 +53,19 @@ pub fn parse_item_html(html: &str, rel_path: &Path, opts: &ParseOptions) -> Resu
         })?;
 
     let signature = main
-        .select(&selector("pre.rust.item-decl"))
+        .select(selector!("pre.rust.item-decl"))
         .next()
         .map(|el| clean_signature(&signature_text(&el)))
         .filter(|text| !text.is_empty());
 
     let source = main
-        .select(&selector(".main-heading a.src"))
+        .select(selector!(".main-heading a.src"))
         .next()
         .and_then(|el| el.value().attr("href"))
         .and_then(|href| parse_source_href(href, rel_path));
 
     let docs_md = main
-        .select(&selector("details.top-doc .docblock"))
+        .select(selector!("details.top-doc .docblock"))
         .next()
         .map(|db| docblock_to_md(&db))
         .filter(|text| !text.is_empty());
@@ -239,7 +251,7 @@ fn collect_members(
     let mut members = Vec::new();
 
     // 字段是 `span`（不是 section），文档紧随其后。
-    for anchor in main.select(&selector("span.structfield")) {
+    for anchor in main.select(selector!("span.structfield")) {
         if let Some(member) = build_member(
             &anchor,
             ItemKind::Field,
@@ -252,7 +264,7 @@ fn collect_members(
     }
 
     // 枚举变体。
-    for anchor in main.select(&selector("section.variant")) {
+    for anchor in main.select(selector!("section.variant")) {
         if let Some(member) = build_member(
             &anchor,
             ItemKind::Variant,
@@ -266,7 +278,7 @@ fn collect_members(
 
     // 方法 / 关联常数 / 关联类型。
     // blanket / synthetic impl 里的成员带 `trait-impl` class，默认跳过。
-    for anchor in main.select(&selector(
+    for anchor in main.select(selector!(
         "section.method, section.associatedconstant, section.associatedtype",
     )) {
         if has_class(&anchor, "trait-impl") {
@@ -298,13 +310,13 @@ fn build_member(
 
     // 方法 / 变体的签名在 `h3/h4.code-header`；字段的签名在 `code` 里。
     let signature = anchor
-        .select(&selector("h3.code-header, h4.code-header"))
+        .select(selector!("h3.code-header, h4.code-header"))
         .next()
         .map(|el| clean_signature(&signature_text(&el)))
         .filter(|text| !text.is_empty())
         .or_else(|| {
             anchor
-                .select(&selector("code"))
+                .select(selector!("code"))
                 .next()
                 .map(|el| clean_signature(&signature_text(&el)))
                 .filter(|text| !text.is_empty())
@@ -346,7 +358,7 @@ fn find_member_doc(anchor: &ElementRef) -> Option<String> {
         };
         if element.value().name() == "details" {
             return element
-                .select(&selector(".docblock"))
+                .select(selector!(".docblock"))
                 .next()
                 .map(|db| docblock_to_md(&db));
         }
@@ -365,7 +377,7 @@ fn docblock_to_md(docblock: &ElementRef) -> String {
 
     // 1) 用占位符抽出代码块，避免 htmd 丢掉语言信息。
     let mut code_blocks = Vec::new();
-    for pre in docblock.select(&selector("pre.rust, pre.rust-example-rendered")) {
+    for pre in docblock.select(selector!("pre.rust, pre.rust-example-rendered")) {
         let raw = pre.html();
         if !html.contains(&raw) {
             continue;
@@ -507,9 +519,4 @@ fn has_class(el: &ElementRef, class: &str) -> bool {
     el.value()
         .attr("class")
         .is_some_and(|classes| classes.split_whitespace().any(|c| c == class))
-}
-
-/// 解析内置选择器；选择器是常量字符串，解析失败属编程错误。
-fn selector(css: &str) -> Selector {
-    Selector::parse(css).expect("内置选择器应始终合法")
 }

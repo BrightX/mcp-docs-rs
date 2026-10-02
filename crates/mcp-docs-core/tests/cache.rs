@@ -174,3 +174,20 @@ fn doc_cache_reuses_parsed_items() {
     cache.invalidate();
     assert!(cache.is_empty());
 }
+
+#[test]
+fn doc_cache_evicts_beyond_capacity() {
+    let cache = DocCache::with_capacity(1);
+    let opts = ParseOptions::default();
+    let demo = PathBuf::from("doc_probe/struct.Demo.html");
+    let kind = PathBuf::from("doc_probe/enum.Kind.html");
+
+    let first = cache.get_or_parse(&fixture_root(), &demo, &opts).unwrap();
+    cache.get_or_parse(&fixture_root(), &kind, &opts).unwrap();
+    assert_eq!(cache.len(), 1, "超出容量应淘汰最久未访问的条目");
+
+    // 被淘汰后重新取用应得到新的解析结果。
+    let again = cache.get_or_parse(&fixture_root(), &demo, &opts).unwrap();
+    assert!(!Arc::ptr_eq(&first, &again), "淘汰后应重新解析");
+    assert_eq!(cache.len(), 1);
+}

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::UNIX_EPOCH;
 
@@ -86,7 +87,8 @@ pub fn is_stale(doc_root: &Path, meta_path: &Path) -> Result<bool> {
 
 /// 写入元信息（原子写）。
 pub fn write_meta(meta: &Meta, path: &Path) -> Result<()> {
-    let json = serde_json::to_vec_pretty(meta)?;
+    // 紧凑 JSON，避免缩进空白放大文件与解析成本。
+    let json = serde_json::to_vec(meta)?;
     atomic_write(path, &json)
 }
 
@@ -103,18 +105,45 @@ pub fn path_mtime(path: &Path) -> Option<u64> {
         .map(|metadata| metadata_mtime(&metadata))
 }
 
+/// 解析缓存默认容量：足以覆盖一次典型的多工具调用，又不至于常驻过多正文。
+const DEFAULT_CACHE_CAPACITY: usize = 512;
+
 /// 条目解析结果的内存缓存（`design.md` §7 的二级缓存）。
 ///
 /// 供 MCP server 按需解析并复用；CLI 一次性运行用不到。
-#[derive(Default)]
+/// 容量有上限，超出后按「最久未访问」近似 LRU 淘汰，避免大 crate 下无界增长。
 pub struct DocCache {
-    entries: Mutex<HashMap<ItemId, Arc<DocItem>>>,
+    entries: Mutex<HashMap<ItemId, Entry>>,
+    capacity: usize,
+    /// 单调递增的访问计数，用作近似的 LRU 时间戳。
+    tick: AtomicU64,
+}
+
+/// 缓存条目：解析结果 + 最近访问时间戳。
+struct Entry {
+    item: Arc<DocItem>,
+    stamp: u64,
+}
+
+impl Default for DocCache {
+    fn default() -> Self {
+        Self::with_capacity(DEFAULT_CACHE_CAPACITY)
+    }
 }
 
 impl DocCache {
-    /// 新建空缓存。
+    /// 新建空缓存（默认容量）。
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 用指定容量新建空缓存（测试小容量淘汰行为用）。
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+            capacity,
+            tick: AtomicU64::new(0),
+        }
     }
 
     /// 取缓存中的条目；缺失时解析并写入缓存。
@@ -129,13 +158,25 @@ impl DocCache {
         id_parts.push(name);
         let id = ItemId(id_parts.join("::"));
 
-        if let Some(cached) = self.lock().get(&id) {
-            return Ok(Arc::clone(cached));
+        // 命中则刷新时间戳并直接返回。
+        if let Some(cached) = self.touch(&id) {
+            return Ok(cached);
         }
 
+        // 未命中：在锁外解析，避免长时间持锁阻塞其他访问。
         let html = fs::read_to_string(doc_root.join(rel_path))?;
         let item = Arc::new(parse::parse_item_html(&html, rel_path, opts)?);
-        self.lock().insert(id, Arc::clone(&item));
+
+        let mut entries = self.lock();
+        let stamp = self.next_tick();
+        entries.insert(
+            id,
+            Entry {
+                item: Arc::clone(&item),
+                stamp,
+            },
+        );
+        self.evict(&mut entries);
         Ok(item)
     }
 
@@ -154,8 +195,36 @@ impl DocCache {
         self.lock().is_empty()
     }
 
+    /// 命中时刷新访问时间戳并返回条目。
+    fn touch(&self, id: &ItemId) -> Option<Arc<DocItem>> {
+        let mut entries = self.lock();
+        let stamp = self.next_tick();
+        let entry = entries.get_mut(id)?;
+        entry.stamp = stamp;
+        Some(Arc::clone(&entry.item))
+    }
+
+    /// 取下一个时间戳。
+    fn next_tick(&self) -> u64 {
+        self.tick.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// 超出容量时淘汰最久未访问的条目。
+    fn evict(&self, entries: &mut HashMap<ItemId, Entry>) {
+        while entries.len() > self.capacity {
+            let Some(oldest) = entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.stamp)
+                .map(|(id, _)| id.clone())
+            else {
+                break;
+            };
+            entries.remove(&oldest);
+        }
+    }
+
     /// 加锁；锁中毒时直接取出内部数据，避免因他人 panic 而连锁失败。
-    fn lock(&self) -> MutexGuard<'_, HashMap<ItemId, Arc<DocItem>>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<ItemId, Entry>> {
         self.entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

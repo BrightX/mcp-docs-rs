@@ -21,6 +21,7 @@ clap = { version = "4", features = ["derive", "env"] }
 scraper = "0.27"
 htmd = "0.5"
 walkdir = "2"
+rayon = "1"
 tempfile = "3"
 rmcp = { version = "3.5", features = ["server", "transport-io", "schemars"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }

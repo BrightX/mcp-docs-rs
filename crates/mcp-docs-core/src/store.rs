@@ -75,6 +75,19 @@ pub fn member_output_path(
 
 /// 原子写入：先写临时文件再 rename，避免读到写了一半的文件。
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    atomic_write_impl(path, bytes, true)
+}
+
+/// 原子写入但不 fsync，用于可重新生成的派生产物（markdown）。
+///
+/// 这些文件即使丢失也能由源 HTML 重新导出，省掉 `sync_all` 可显著减少
+/// 全量导出的系统调用开销；`index.json` / `meta.json` 仍用带 fsync 的
+/// [`atomic_write`] 保证一致性。
+pub fn atomic_write_fast(path: &Path, bytes: &[u8]) -> Result<()> {
+    atomic_write_impl(path, bytes, false)
+}
+
+fn atomic_write_impl(path: &Path, bytes: &[u8], sync: bool) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -82,7 +95,9 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     {
         let mut file = fs::File::create(&tmp)?;
         file.write_all(bytes)?;
-        file.sync_all()?;
+        if sync {
+            file.sync_all()?;
+        }
     }
     fs::rename(&tmp, path)?;
     Ok(())

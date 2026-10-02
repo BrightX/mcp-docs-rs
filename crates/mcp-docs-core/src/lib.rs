@@ -8,6 +8,7 @@ mod discover;
 mod error;
 mod index;
 mod link;
+mod lookup;
 mod markdown;
 mod model;
 mod parse;
@@ -23,6 +24,7 @@ pub use discover::{discover_all, discover_crate, list_crates};
 pub use error::{Error, Result};
 pub use index::{build, build_index, load_index, write_index, BuildOptions, BuildReport};
 pub use link::{html_to_md_relpath, resolve_href, Resolved};
+pub use lookup::IdIndex;
 pub use markdown::{render_item, render_member_item, rewrite_links, LinkStyle, RenderOptions};
 pub use model::{
     CrateSummary, DiscoveredItem, DocItem, Granularity, Index, ItemId, ItemKind, ItemSummary,
@@ -33,7 +35,9 @@ pub use parse::{
 };
 pub use search::{search, search_page, MatchMode, SearchHit, SearchOutcome, SearchQuery};
 pub use sidebar::{parse_sidebar_file, parse_sidebar_str};
-pub use store::{atomic_write, encode_fs_name, item_output_path, member_output_path};
+pub use store::{
+    atomic_write, atomic_write_fast, encode_fs_name, item_output_path, member_output_path,
+};
 
 /// FNV-1a 32 位哈希，用于超长文件名截断与内容指纹。
 pub(crate) fn fnv1a(bytes: &[u8]) -> u32 {
