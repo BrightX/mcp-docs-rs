@@ -11,9 +11,11 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
-    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
-    ResourceContents, ResourceTemplate, ServerCapabilities, ServerConfig,
+    GetPromptRequestParams, GetPromptResponse, GetPromptResult, ListPromptsResult,
+    ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams, Prompt,
+    PromptArgument, PromptMessage, ReadResourceRequestParams, ReadResourceResponse,
+    ReadResourceResult, Resource, ResourceContents, ResourceTemplate, Role, ServerCapabilities,
+    ServerConfig,
 };
 use rmcp::schemars::{self, JsonSchema};
 use rmcp::service::RequestContext;
@@ -1162,12 +1164,41 @@ impl ServerHandler for DocsServer {
         ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
+                .enable_prompts()
                 .enable_resources()
+                .enable_resources_list_changed()
                 .build(),
         )
         .with_instructions(
             "检索本地 rustdoc 文档。先用 search_items / list_items 找到条目，再用 get_item 读取 markdown。",
         )
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, McpError> {
+        Ok(ListPromptsResult {
+            prompts: prompt_definitions(),
+            ..Default::default()
+        })
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, McpError> {
+        let id = request
+            .arguments
+            .as_ref()
+            .and_then(|arguments| arguments.get("id"))
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let messages = build_prompt(&request.name, id)
+            .map_err(|message| McpError::invalid_params(message, None))?;
+        Ok(GetPromptResult::new(messages).into())
     }
 
     async fn list_resources(
@@ -1353,6 +1384,44 @@ fn kind_name(kind: ItemKind) -> String {
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_default()
+}
+
+/// 服务提供的 prompt 模板定义。
+fn prompt_definitions() -> Vec<Prompt> {
+    let id_argument = || {
+        PromptArgument::new("id")
+            .with_description("条目 id（如 tokio::spawn）")
+            .with_required(true)
+    };
+    vec![
+        Prompt::new(
+            "explain_api",
+            Some("解释某个 API 的用途与用法"),
+            Some(vec![id_argument()]),
+        ),
+        Prompt::new(
+            "usage_example",
+            Some("给出某个 API 的调用示例"),
+            Some(vec![id_argument()]),
+        ),
+    ]
+}
+
+/// 按模板名与条目 id 构造 prompt 消息。
+fn build_prompt(name: &str, id: &str) -> Result<Vec<PromptMessage>, String> {
+    if id.trim().is_empty() {
+        return Err("缺少必需参数 `id`".to_string());
+    }
+    let text = match name {
+        "explain_api" => format!(
+            "请解释条目 `{id}` 的用途与用法：先调用 `get_item`（id = \"{id}\"）读取它的完整文档（签名 + 文档 + 成员），再结合签名与示例给出简明讲解。"
+        ),
+        "usage_example" => format!(
+            "请给出条目 `{id}` 的调用示例：先调用 `get_item` 与 `get_examples`（id = \"{id}\"）获取文档与示例代码，再给出可直接运行的最小示例。"
+        ),
+        other => return Err(format!("未知的 prompt：`{other}`")),
+    };
+    Ok(vec![PromptMessage::new_text(Role::User, text)])
 }
 
 /// 解析 `kind` 参数。
@@ -1548,6 +1617,23 @@ mod tests {
         assert_eq!(query_param("offset=10&limit=5", "limit"), Some(5));
         assert_eq!(query_param("offset=x", "offset"), None);
         assert_eq!(query_param("", "offset"), None);
+    }
+
+    /// prompt 定义与消息构造。
+    #[test]
+    fn prompt_definitions_and_build() {
+        let definitions = prompt_definitions();
+        assert_eq!(definitions.len(), 2);
+        assert!(definitions
+            .iter()
+            .any(|prompt| prompt.name == "explain_api"));
+
+        let messages = build_prompt("explain_api", "doc_probe::struct.Demo").unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, Role::User);
+
+        assert!(build_prompt("explain_api", "").is_err());
+        assert!(build_prompt("unknown", "x").is_err());
     }
 
     /// 构建带索引与 markdown 的服务，供工具测试。
