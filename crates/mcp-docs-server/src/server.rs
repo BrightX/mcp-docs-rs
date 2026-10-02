@@ -7,7 +7,7 @@ use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard};
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
@@ -20,7 +20,7 @@ use rmcp::model::{
 use rmcp::schemars::{self, JsonSchema};
 use rmcp::service::RequestContext;
 use rmcp::{
-    tool, tool_handler, tool_router, ErrorData as McpError, Json, RoleServer, ServerHandler,
+    tool, tool_handler, tool_router, ErrorData as McpError, Json, Peer, RoleServer, ServerHandler,
 };
 use tokio::sync::watch;
 
@@ -327,6 +327,8 @@ pub struct DocsServer {
     ready: watch::Receiver<bool>,
     /// 是否正在后台构建索引（供 `index_status` 暴露进度）。
     building: Arc<AtomicBool>,
+    /// 最近一次请求的客户端句柄，用于在后台构建完成后发送通知（尽力而为）。
+    peer: Arc<OnceLock<Peer<RoleServer>>>,
 }
 
 impl DocsServer {
@@ -352,6 +354,7 @@ impl DocsServer {
             cache: Arc::new(DocCache::new()),
             ready,
             building: Arc::new(AtomicBool::new(false)),
+            peer: Arc::new(OnceLock::new()),
         };
 
         // 后台刷新索引；无论成功与否都要置位就绪，避免调用方永久等待。
@@ -363,6 +366,8 @@ impl DocsServer {
                 eprintln!("后台构建索引失败：{err:#}");
             }
             building.store(false, Ordering::Relaxed);
+            // 构建完成后通知客户端刷新资源清单（若已捕获到 peer）。
+            worker.notify_resources_changed().await;
             let _ = ready_tx.send(true);
         });
 
@@ -419,6 +424,18 @@ impl DocsServer {
         self.index
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// 记录客户端句柄（首次请求时），供后续发通知。
+    fn remember_peer(&self, peer: Peer<RoleServer>) {
+        let _ = self.peer.set(peer);
+    }
+
+    /// 尽力通知客户端资源清单已变化（未捕获到 peer 时静默跳过）。
+    async fn notify_resources_changed(&self) {
+        if let Some(peer) = self.peer.get() {
+            let _ = peer.notify_resource_list_changed().await;
+        }
     }
 
     /// 解析条目（命中内存缓存时直接复用）。
@@ -638,8 +655,10 @@ impl DocsServer {
     async fn rebuild_index(
         &self,
         Parameters(params): Parameters<RebuildParams>,
+        peer: Peer<RoleServer>,
     ) -> Result<String, String> {
         self.ensure_ready().await;
+        self.remember_peer(peer);
 
         let options = BuildOptions {
             persist: true,
@@ -661,6 +680,9 @@ impl DocsServer {
             .index
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Loaded::new(report.index);
+
+        // 索引变了，通知客户端刷新资源清单。
+        self.notify_resources_changed().await;
 
         Ok(to_json(&serde_json::json!({
             "rebuilt": true,
@@ -1204,8 +1226,9 @@ impl ServerHandler for DocsServer {
     async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
+        self.remember_peer(context.peer.clone());
         self.ensure_ready().await;
         let index = self.index();
         let mut resources = vec![
@@ -1242,8 +1265,9 @@ impl ServerHandler for DocsServer {
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
+        self.remember_peer(context.peer.clone());
         let text = self.read_uri(&request.uri).await?;
         let contents =
             ResourceContents::text(text, request.uri.clone()).with_mime_type("text/markdown");
