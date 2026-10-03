@@ -37,9 +37,7 @@
 
 ## 1. 解析与渲染
 
-### E-1.1
-
-**标题**：`get_item_section` 拿不到文档分节（examples / panics 等）
+### E-1.1 <a id="e-11"></a>`get_item_section` 拿不到文档分节（examples / panics 等）
 
 **现象**：`get_item_json.sections` 恒为空数组；`get_item_section{section:"examples"}` 报「没有分节」。实测 `anstream::macro.eprint`（导出 md 含 `## Panics` / `## Examples`）、`futures::future::fn.select_all` 均如此；`tokio::runtime::struct.Runtime` 仅返回 `["implementations","trait-implementations"]`。
 
@@ -57,9 +55,7 @@ tools/call get_item_section {"id":"anstream::macro.eprint","section":"examples"}
 
 **验证**：Inspector CLI 复验 `anstream::macro.eprint`：`get_item_section{section:"examples"}` 返回 rust 代码块、`{section:"panics"}` 返回正文；`get_item_json.sections` 为 `["panics","examples"]`（均带 `body_md`）。
 
-### E-1.2
-
-**标题**：`get_examples` 把签名块当示例返回
+### E-1.2 <a id="e-12"></a>`get_examples` 把签名块当示例返回
 
 **现象**：`get_examples{id:"tokio::task::fn.spawn"}` 的第一个 example 是签名 `pub fn spawn<F>(...)`。
 
@@ -73,9 +69,7 @@ tools/call get_item_section {"id":"anstream::macro.eprint","section":"examples"}
 
 ## 2. 导航与关系
 
-### E-2.1
-
-**标题**：`get_trait_implementors` 对 re-export 的 trait 失效
+### E-2.1 <a id="e-21"></a>`get_trait_implementors` 对 re-export 的 trait 失效
 
 **现象**：返回 `count:0`，但实现清单文件确实存在且非空。
 
@@ -93,9 +87,7 @@ tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → co
 
 **验证**：Inspector CLI 复验 `bitflags::trait.Flags` → `count:2`；`serde::ser::trait.Serialize`（实现被拆到 `serde_core`）→ `count:215`。
 
-### E-2.2
-
-**标题**：`get_related_items` 对成员条目返回全空
+### E-2.2 <a id="e-22"></a>`get_related_items` 对成员条目返回全空
 
 **现象**：`tokio::runtime::struct.Runtime::method.spawn` 返回 `siblings:[] children:[]`，同 struct 其余 8 个方法既不在 `siblings` 也不在 `children`。
 
@@ -109,9 +101,7 @@ tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → co
 
 ## 3. MCP 接口
 
-### E-3.1
-
-**标题**：`index_status.building` 恒为 `true`
+### E-3.1 <a id="e-31"></a>`index_status.building` 恒为 `true`
 
 **现象**：`ready:true`、`stale:false`、`item_count:18922` 时 `building` 仍为 `true`（多次复查一致）。
 
@@ -123,9 +113,7 @@ tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → co
 
 **验证**：`index_status` 在已有索引且不 stale 时返回 `building:false`。
 
-### E-3.2
-
-**标题**：`get_item_json.docs_md` 未重写链接
+### E-3.2 <a id="e-32"></a>`get_item_json.docs_md` 未重写链接
 
 **现象**：`docs_md` 中链接为 `[`JoinHandle`](struct.JoinHandle.html "…")`，而 `get_item` / 导出 md 为 `.md`。
 
@@ -137,9 +125,7 @@ tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → co
 
 **验证**：`get_item_json{id:"tokio::task::fn.spawn"}` 的 `docs_md` 链接为 `.md`，无 `.html`。
 
-### E-3.3
-
-**标题**：`list_crates` 的 `version` 恒为 `null`
+### E-3.3 <a id="e-33"></a>`list_crates` 的 `version` 恒为 `null`
 
 **根因**：rustdoc 产物不含 crate 版本，`CrateSummary.version` 无数据来源（`model.rs`）。
 
@@ -151,9 +137,7 @@ tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → co
 
 ## 4. 协议与可移植性
 
-### E-4.1
-
-**标题**：JSON Schema 使用非标准 `format`（uint / uint32 / uint64）
+### E-4.1 <a id="e-41"></a>JSON Schema 使用非标准 `format`（uint / uint32 / uint64）
 
 **现象**：Inspector `tools/list` 报告 `Schema portability: 0 errors, 33 warnings across 13 tools`，全部为 `unknown format "uint"/"uint32"/"uint64" ignored`。
 
