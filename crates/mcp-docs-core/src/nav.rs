@@ -172,6 +172,45 @@ pub fn trait_impl_rel_path(html_path: &Path) -> PathBuf {
     Path::new("trait.impl").join(html_path).with_extension("js")
 }
 
+/// 查找某个 trait 的实现清单文件。
+///
+/// rustdoc 把实现清单放在 trait 的**定义模块**下，而条目 `html_path` 是文档页路径；
+/// 对 re-export 的 trait（如 `serde::Serialize` 的实现实际在 `serde_core`）两者不一致，
+/// 故精确路径未命中时按文件名回退搜索（见 `docs/issues.md` E-2.1）。
+pub fn find_trait_impl_paths(doc_dir: &Path, html_path: &Path) -> Vec<PathBuf> {
+    let exact = doc_dir.join(trait_impl_rel_path(html_path));
+    if exact.is_file() {
+        return vec![exact];
+    }
+
+    let Some(file_name) = html_path
+        .file_name()
+        .map(|name| Path::new(name).with_extension("js"))
+    else {
+        return Vec::new();
+    };
+    let root = doc_dir.join("trait.impl");
+
+    // 优先在同一 crate 目录下搜索，避免命中其它 crate 的同名 trait。
+    if let Some(crate_name) = html_path.components().next() {
+        let hits = collect_impl_files(&root.join(crate_name.as_os_str()), file_name.as_os_str());
+        if !hits.is_empty() {
+            return hits;
+        }
+    }
+    collect_impl_files(&root, file_name.as_os_str())
+}
+
+/// 递归收集 `dir` 下文件名为 `file_name` 的文件（目录不存在时返回空）。
+fn collect_impl_files(dir: &Path, file_name: &std::ffi::OsStr) -> Vec<PathBuf> {
+    walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() == file_name)
+        .map(|entry| entry.into_path())
+        .collect()
+}
+
 /// 抽取 `Object.fromEntries(` 后的数组字面量，按字符串与括号配对定位结尾。
 fn extract_array_literal(js: &str) -> Option<&str> {
     const PREFIX: &str = "Object.fromEntries(";

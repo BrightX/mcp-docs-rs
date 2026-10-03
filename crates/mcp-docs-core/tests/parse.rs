@@ -87,9 +87,22 @@ fn splits_sections_and_skips_noise() {
     let ids: Vec<&str> = item.sections.iter().map(|s| s.id.as_str()).collect();
     assert!(ids.contains(&"fields"));
     assert!(ids.contains(&"implementations"));
+    // 文档分节（无 section-header class、位于 docblock 内）也要收集（ISSUE-1）。
+    assert!(ids.contains(&"examples"));
     // 噪声区块默认剥离。
     assert!(!ids.contains(&"synthetic-implementations"));
     assert!(!ids.contains(&"blanket-implementations"));
+
+    let examples = item
+        .sections
+        .iter()
+        .find(|section| section.id == "examples")
+        .expect("应收集到 examples 文档分节");
+    assert!(
+        examples.body_md.contains("doc_probe::Demo"),
+        "examples 正文应包含示例代码，实际：{}",
+        examples.body_md
+    );
 }
 
 #[test]

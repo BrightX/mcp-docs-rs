@@ -34,8 +34,8 @@ pub use model::{
     Section, SourceRef, INDEX_SCHEMA_VERSION,
 };
 pub use nav::{
-    module_tree, parse_trait_impls, related_items, trait_impl_rel_path, ModuleNode, RelatedItems,
-    TraitImpl,
+    find_trait_impl_paths, module_tree, parse_trait_impls, related_items, trait_impl_rel_path,
+    ModuleNode, RelatedItems, TraitImpl,
 };
 pub use parse::{
     extract_source_lines, parse_item_html, parse_one_line, parse_rustdoc_meta, path_to_identity,

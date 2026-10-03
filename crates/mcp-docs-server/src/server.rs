@@ -26,10 +26,10 @@ use tokio::sync::watch;
 
 use mcp_docs_core::MatchMode;
 use mcp_docs_core::{
-    build, extract_code_blocks, extract_source_lines, is_stale, load_index, module_tree,
-    parse_trait_impls, related_items, render_item, render_member_item, search_page,
-    trait_impl_rel_path, BuildOptions, DocCache, DocItem, Granularity, IdIndex, Index, ItemKind,
-    ItemSummary, ParseOptions, RenderOptions, SearchQuery, INDEX_SCHEMA_VERSION,
+    build, extract_code_blocks, extract_source_lines, find_trait_impl_paths, is_stale, load_index,
+    module_tree, parse_trait_impls, related_items, render_item, render_member_item, search_page,
+    BuildOptions, DocCache, DocItem, Granularity, IdIndex, Index, ItemKind, ItemSummary,
+    ParseOptions, RenderOptions, SearchQuery, INDEX_SCHEMA_VERSION,
 };
 
 /// `list_items` 的参数。
@@ -1070,11 +1070,27 @@ impl DocsServer {
             ));
         }
 
-        let rel = trait_impl_rel_path(Path::new(&summary.html_path));
-        let path = self.doc_dir.join(&rel);
-        let impls = fs::read_to_string(&path)
-            .map(|js| parse_trait_impls(&js))
-            .unwrap_or_default();
+        let paths = find_trait_impl_paths(&self.doc_dir, Path::new(&summary.html_path));
+        if paths.is_empty() {
+            return Ok(to_json(&serde_json::json!({
+                "id": summary.id.0,
+                "count": 0,
+                "implementors": [],
+                "note": "未找到实现清单文件（trait.impl/**/trait.<Name>.js）",
+            })));
+        }
+
+        let mut impls = Vec::new();
+        for path in &paths {
+            let js = fs::read_to_string(path)
+                .map_err(|err| format!("读取实现清单 `{}` 失败：{err}", path.display()))?;
+            for imp in parse_trait_impls(&js) {
+                if !impls.contains(&imp) {
+                    impls.push(imp);
+                }
+            }
+        }
+
         let implementors: Vec<serde_json::Value> = impls
             .iter()
             .map(|imp| serde_json::json!({ "crate": imp.crate_name, "impl": imp.text }))
@@ -1084,11 +1100,7 @@ impl DocsServer {
             "id": summary.id.0,
             "count": implementors.len(),
             "implementors": implementors,
-            "note": if implementors.is_empty() {
-                "未找到实现者（可能确实无实现，或产物缺少 trait.impl 文件）"
-            } else {
-                ""
-            },
+            "note": "",
         })))
     }
 

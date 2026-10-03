@@ -78,6 +78,7 @@ pub fn parse_item_html(html: &str, rel_path: &Path, opts: &ParseOptions) -> Resu
     let id = ItemId(id_parts.join("::"));
 
     let mut sections = collect_sections(&main, opts);
+    fill_section_bodies(&mut sections, docs_md.as_deref());
     let members = collect_members(&main, &path, &name, &id);
 
     // 按类型把成员归组到对应分节；找不到归属的成员仍保留在扁平列表里。
@@ -223,7 +224,13 @@ fn parse_source_href(href: &str, current_rel: &Path) -> Option<SourceRef> {
     })
 }
 
-/// 收集页面上的可见分节（`h2.section-header`），按出现顺序。
+/// 收集页面上的分节，按出现顺序。
+///
+/// 分两类（见 `docs/issues.md` E-1.1）：
+/// - **结构分节**：`implementations` / `trait-implementations` 等，是 `main` 的直接子级，
+///   带 `section-header` class；
+/// - **文档分节**：`examples` / `panics` 等由文档作者书写，位于主文档 `docblock` 内部，
+///   rustdoc 1.98 起不带 `section-header` class。
 fn collect_sections(main: &ElementRef, opts: &ParseOptions) -> Vec<Section> {
     let mut sections = Vec::new();
     for heading in main.child_elements().filter(is_section_header) {
@@ -238,7 +245,59 @@ fn collect_sections(main: &ElementRef, opts: &ParseOptions) -> Vec<Section> {
             members: Vec::new(),
         });
     }
+
+    // 文档分节在主文档 docblock 内部，不在 `main` 的直接子级，需单独收集。
+    if let Some(docblock) = main.select(selector!("details.top-doc .docblock")).next() {
+        for heading in docblock.select(selector!("h2")) {
+            let id = heading.value().attr("id").unwrap_or_default().to_string();
+            if id.is_empty() || (!opts.include_auto_impls && is_noise_section(&id)) {
+                continue;
+            }
+            sections.push(Section {
+                id,
+                title: heading_text(&heading),
+                body_md: String::new(),
+                members: Vec::new(),
+            });
+        }
+    }
+
     sections
+}
+
+/// 为各分节从条目 markdown 中切出正文（标题行到下一个二级标题之间）。
+///
+/// 结构分节的标题不出现在正文 markdown 中，切不到即为空，符合预期。
+fn fill_section_bodies(sections: &mut [Section], docs_md: Option<&str>) {
+    let Some(md) = docs_md else {
+        return;
+    };
+    for section in sections.iter_mut() {
+        section.body_md = extract_md_section(md, &section.title);
+    }
+}
+
+/// 抽取 markdown 中标题为 `## {title}` 的分节正文（不含标题行）。
+fn extract_md_section(md: &str, title: &str) -> String {
+    if title.is_empty() {
+        return String::new();
+    }
+    let heading = format!("## {title}");
+    let mut offset = 0;
+    let Some(body_start) = md.split_inclusive('\n').find_map(|line| {
+        offset += line.len();
+        (line.trim_end() == heading).then_some(offset)
+    }) else {
+        return String::new();
+    };
+
+    let rest = &md[body_start..];
+    let end = if rest.starts_with("## ") {
+        0
+    } else {
+        rest.find("\n## ").map(|i| i + 1).unwrap_or(rest.len())
+    };
+    rest[..end].trim().to_string()
 }
 
 /// 收集页面上全部成员条目（字段 / 变体 / 方法 / 关联项）。
