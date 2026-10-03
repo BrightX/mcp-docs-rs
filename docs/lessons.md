@@ -168,6 +168,27 @@
 **对**：没有文档注释时，rustdoc 会填入自动生成的占位描述（`API documentation for the Rust \`X\` struct in crate \`Y\`.`），于是出现 `has_docs:false` 却带一段"摘要"的条目 —— 真实规模 18922 条里有 1586 条。应只在 `docs_md` 存在时才生成 `one_line`（两者实测 100% 对应）。该改动影响索引内容，需递增 `INDEX_SCHEMA_VERSION`（#1.20）。
 **相关**：`index.rs`
 
+### #1.26 rustdoc 1.98 的文档分节 h2 不带 `section-header`
+
+**错**：沿用 #1.6 的结论，认为分节标题都是 `<h2 class="section-header">`，用「`main-content` 直接子级 + `section-header`」收集分节。
+**对**：文档作者书写的分节（`## Panics` / `## Examples` 等）是 `<h2 id="panics">`，**无 class**，且位于主文档 `details.top-doc .docblock` **内部**（不是 `main-content` 的直接子级）；只有 `implementations` / `trait-implementations` 这类结构分节才带 `section-header`、才是 `main` 直接子级。只按 class/层级收集会漏掉全部文档分节，`get_item_section` 对 examples/panics 恒报「没有分节」（且 `Section.body_md` 若未从正文切出也拿不到内容）。
+**规避**：区分两类分节——结构分节看 `main` 直接子级 + `section-header`；文档分节看 `docblock` 内的 `h2[id]`（不看 class）。分节正文可从条目 markdown 按 `## 标题` 切出。
+**相关**：`parse.rs::collect_sections`；issues E-1.1
+
+### #1.27 trait.impl 文件按 trait 定义模块存放，与文档页路径可能不一致
+
+**错**：认为实现清单 `trait.impl/{trait 页路径}.js` 与 trait 页同目录，直接由 `html_path` 拼路径。
+**对**：rustdoc 把 `trait.<Name>.js` 放在 trait 的**定义模块**下。re-export 时文档页在根路径而实现清单在定义模块，甚至跨 crate：`bitflags::Flags` 页在 `bitflags/trait.Flags.html`、实现在 `trait.impl/bitflags/traits/trait.Flags.js`；`serde::Serialize` 的实现被拆到 `serde_core`。按 `html_path` 硬拼读不到文件，且若用 `unwrap_or_default()` 会静默返回 0 实现者。
+**规避**：精确路径未命中时，在 `trait.impl` 下按文件名回退搜索（先同 crate 目录、再全局）；并把「文件不存在」与「文件为空」区分开。
+**相关**：`nav.rs::trait_impl_rel_path` / `find_trait_impl_paths`；issues E-2.1
+
+### #1.28 条目渲染结果里的代码块含签名，不等于「示例」
+
+**错**：从条目渲染后的整篇 markdown 抽 ```rust 代码块当作「文档示例」。
+**对**：`render_item` 的输出结构是 `# id` → 类型 → **签名块** → 文档正文 → 成员（每个成员也各带一个签名块）。签名同样是 ```rust 围栏，会被一并抽出，于是第一个「示例」就是签名本身，成员签名同理。签名不是示例。
+**规避**：示例应从**文档正文**（`docs_md` / 成员的 `docs_md`）抽取，不要从整篇渲染结果抽取。
+**相关**：`server.rs::get_examples_blocking`；issues E-1.2
+
 ## 2. 文件系统与路径
 
 ### #2.1 文件名绝不能用 `::`
