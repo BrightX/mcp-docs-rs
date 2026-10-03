@@ -1,0 +1,152 @@
+# 缺陷跟踪（Issues）
+
+记录**功能缺陷**——代码行为与预期或文档声明不符的问题，跟踪到修复关闭。
+
+与 [lessons.md](lessons.md) 的分工：
+
+- `lessons.md`：开发过程中**因认知偏差踩的坑**（对 rustdoc 结构、工具链、协议的错误假设），修复后作为知识保留。
+- `issues.md`：**功能缺陷**，按状态跟踪。同一问题若既含认知教训又需跟踪修复，教训记 `lessons.md`、修复进度记本文件，互相链接，不重复正文。
+
+**编号格式 `E-x.y`**：`x` = 章节号（与主题绑定），`y` = 该章节内条目序号。编号只追加、不复用；`x` 拆分后不变（参照 [conventions.md](conventions.md) §6.5）。
+
+**严重度**：`P1` 功能失效（工具不可用/结果错误）；`P2` 语义或一致性（结果误导、输出不一致）；`P3` 协议或可移植性（告警、兼容性）。
+
+**状态**：⬜ 待修复 / 🔧 修复中 / ✅ 已修复 / ⛔ 不修复。
+
+## 目录
+
+1. [解析与渲染](#1-解析与渲染)
+2. [导航与关系](#2-导航与关系)
+3. [MCP 接口](#3-mcp-接口)
+4. [协议与可移植性](#4-协议与可移植性)
+
+## 索引
+
+| 编号 | 严重度 | 标题 | 状态 |
+|---|---|---|---|
+| [E-1.1](#e-11) | P1 | `get_item_section` 拿不到文档分节（examples/panics 等） | ✅ 已修复 |
+| [E-1.2](#e-12) | P2 | `get_examples` 把签名块当示例返回 | ⬜ 待修复 |
+| [E-2.1](#e-21) | P1 | `get_trait_implementors` 对 re-export 的 trait 失效 | ✅ 已修复 |
+| [E-2.2](#e-22) | P2 | `get_related_items` 对成员条目返回全空 | ⬜ 待修复 |
+| [E-3.1](#e-31) | P2 | `index_status.building` 恒为 `true` | ⬜ 待修复 |
+| [E-3.2](#e-32) | P2 | `get_item_json.docs_md` 未重写链接 | ⬜ 待修复 |
+| [E-3.3](#e-33) | P2 | `list_crates` 的 `version` 恒为 `null` | ⬜ 待修复 |
+| [E-4.1](#e-41) | P3 | JSON Schema 使用非标准 `format`（uint/uint32/uint64） | ⬜ 待修复 |
+
+---
+
+## 1. 解析与渲染
+
+### E-1.1
+
+**标题**：`get_item_section` 拿不到文档分节（examples / panics 等）
+
+**现象**：`get_item_json.sections` 恒为空数组；`get_item_section{section:"examples"}` 报「没有分节」。实测 `anstream::macro.eprint`（导出 md 含 `## Panics` / `## Examples`）、`futures::future::fn.select_all` 均如此；`tokio::runtime::struct.Runtime` 仅返回 `["implementations","trait-implementations"]`。
+
+**复现**：
+```
+tools/call get_item_section {"id":"anstream::macro.eprint","section":"examples"}
+→ isError:true  条目 `anstream::macro.eprint` 没有分节 `examples`
+```
+
+**根因**：`collect_sections` 只收集 `main-content` **直接子级**中的 `h2.section-header`（`crates/mcp-docs-core/src/parse.rs`，`is_section_header`）。而 rustdoc 1.98 的用户文档分节是 `<h2 id="panics">`（**无 class**）且位于 `details.top-doc .docblock` **内部**，两条都不满足；带 `section-header` 的只有 `implementations` / `trait-implementations` 这类结构分节。另 `Section.body_md` 恒为 `String::new()`，文档分节即便被收集也拿不到正文。测试 `tests/parse.rs` 只断言了带 class 的 `fields` / `implementations`，未覆盖无 class 的文档分节，故长期未暴露。
+
+**影响**：`get_item_section` 对最常用的 `examples` / `panics` 场景完全不可用。
+
+**修复**：分节识别扩展到 docblock 内的 `h2[id]`（无 class 也算），并按标题从 `docs_md` 切出该节正文填充 `body_md`。
+
+**验证**：Inspector CLI 复验 `anstream::macro.eprint`：`get_item_section{section:"examples"}` 返回 rust 代码块、`{section:"panics"}` 返回正文；`get_item_json.sections` 为 `["panics","examples"]`（均带 `body_md`）。
+
+### E-1.2
+
+**标题**：`get_examples` 把签名块当示例返回
+
+**现象**：`get_examples{id:"tokio::task::fn.spawn"}` 的第一个 example 是签名 `pub fn spawn<F>(...)`。
+
+**根因**：`markdown.rs::extract_code_blocks` 抽出条目 markdown 中所有 ```rust 围栏，未排除签名块。
+
+**影响**：示例列表混入非示例内容。
+
+## 2. 导航与关系
+
+### E-2.1
+
+**标题**：`get_trait_implementors` 对 re-export 的 trait 失效
+
+**现象**：返回 `count:0`，但实现清单文件确实存在且非空。
+
+**复现**：
+```
+tools/call get_trait_implementors {"id":"bitflags::trait.Flags"}          → count 0（文件 trait.impl/bitflags/traits/trait.Flags.js 有内容）
+tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → count 0（实现在 serde_core）
+```
+
+**根因**：`trait_impl_rel_path` 直接用条目 `html_path` 推导 impl 路径（`crates/mcp-docs-core/src/nav.rs`），假设实现清单与 trait 页同目录。但 rustdoc 把实现清单放在 **trait 定义模块**下：`bitflags::Flags` 正文页在 `bitflags/trait.Flags.html`，实现清单在 `trait.impl/bitflags/traits/trait.Flags.js`；`serde` 的实现页进一步被拆到 `serde_core`。此外 `server.rs` 用 `unwrap_or_default()` 静默吞掉读文件失败，把「路径推导错误」与「确实无实现」混同。
+
+**影响**：对 rustdoc 中大量 re-export 的 trait，实现者查询恒为空且无任何提示。
+
+**修复**：路径推导改为「精确路径优先，否则在 `trait.impl` 下按文件名回退搜索」，并区分「未找到文件」与「文件为空」。
+
+**验证**：Inspector CLI 复验 `bitflags::trait.Flags` → `count:2`；`serde::ser::trait.Serialize`（实现被拆到 `serde_core`）→ `count:215`。
+
+### E-2.2
+
+**标题**：`get_related_items` 对成员条目返回全空
+
+**现象**：`tokio::runtime::struct.Runtime::method.spawn` 返回 `siblings:[] children:[]`，同 struct 其余 8 个方法既不在 `siblings` 也不在 `children`。
+
+**根因**：`related_items` 中 `siblings` 只收「同模块顶层条目」（`nav.rs`），`children` 只收 `parent_id == 自身`；成员条目的兄弟成员无对应字段。
+
+**影响**：关系导航对成员条目形同虚设。
+
+## 3. MCP 接口
+
+### E-3.1
+
+**标题**：`index_status.building` 恒为 `true`
+
+**现象**：`ready:true`、`stale:false`、`item_count:18922` 时 `building` 仍为 `true`（多次复查一致）。
+
+**根因**：`server.rs::index_status_blocking` 直接读 `self.building`，疑似后台刷新路径未在「无需刷新」时复位（`building` 初值 `false`）。
+
+**影响**：误导 Agent 认为索引仍在构建。
+
+**状态**：⬜ 待修复（需先确认 `refresh_index` 的复位时序）。
+
+### E-3.2
+
+**标题**：`get_item_json.docs_md` 未重写链接
+
+**现象**：`docs_md` 中链接为 `[`JoinHandle`](struct.JoinHandle.html "…")`，而 `get_item` / 导出 md 为 `.md`。
+
+**根因**：`get_item_json_blocking` 直接 `item.docs_md.clone()`，未过 `rewrite_links`。
+
+**影响**：字段名 `docs_md` 却给 HTML 链接，与其它输出不一致，客户端需自行处理。
+
+### E-3.3
+
+**标题**：`list_crates` 的 `version` 恒为 `null`
+
+**根因**：rustdoc 产物不含 crate 版本，`CrateSummary.version` 无数据来源（`model.rs`）。
+
+**影响**：字段无信息量；Agent 无法据此判断 crate 版本。
+
+## 4. 协议与可移植性
+
+### E-4.1
+
+**标题**：JSON Schema 使用非标准 `format`（uint / uint32 / uint64）
+
+**现象**：Inspector `tools/list` 报告 `Schema portability: 0 errors, 33 warnings across 13 tools`，全部为 `unknown format "uint"/"uint32"/"uint64" ignored`。
+
+**根因**：rmcp / schemars 为 `usize` / `u64` / `u32` 生成 `format: "uint*"`（`tools/list` 输出）。
+
+**影响**：严格客户端可能拒绝或忽略这些约束。
+
+---
+
+## 记录约定
+
+- 新缺陷追加到所属章节并在「索引」表登记，编号 `E-x.y` 递增；新主题新增章节号。
+- 关闭缺陷时更新状态并注明修复提交；若含认知教训，链接到 `lessons.md`。
+- 与 `lessons.md` 重叠时只在一处写正文，另一处用相对链接引用。

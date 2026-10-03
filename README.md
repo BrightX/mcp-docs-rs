@@ -90,6 +90,7 @@ Prompts：`explain_api` / `usage_example`（入参 `id`，引导模型先读文�
 - [里程碑与进度](docs/roadmap.md)
 - [开发规范](docs/conventions.md)
 - [错题集](docs/lessons.md)
+- [缺陷跟踪](docs/issues.md)
 - [术语与代码位置对照](docs/glossary.md)
 
 ## 开发

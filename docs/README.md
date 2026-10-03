@@ -9,6 +9,7 @@
 | [roadmap.md](roadmap.md) | 进度计划与里程碑（M0–M9），含各阶段验收标准与状态 |
 | [conventions.md](conventions.md) | 开发规范：代码质量、代码风格、注释规范、提交规范、工作流 |
 | [lessons.md](lessons.md) | 错题集：分章节记录踩过的坑，编号 `#x.y` |
+| [issues.md](issues.md) | 缺陷跟踪：功能性缺陷（区别于 lessons 的认知踩坑），编号 `E-x.y` |
 | [glossary.md](glossary.md) | 术语与代码位置对照：分章节记录术语 / 别名 → 代码位置 |
 
 ## 约定
