@@ -72,7 +72,7 @@ fn child_of<'a>(node: &'a mut ModuleNode, name: &str) -> &'a mut ModuleNode {
 pub struct RelatedItems {
     /// 父条目（成员条目才有，指向所属条目）。
     pub parent: Option<ItemSummary>,
-    /// 同模块的兄弟条目（顶层条目）。
+    /// 兄弟条目：成员条目为同父条目下的其它成员，顶层条目为同模块的其它顶层条目。
     pub siblings: Vec<ItemSummary>,
     /// 子成员条目。
     pub children: Vec<ItemSummary>,
@@ -94,16 +94,24 @@ pub fn related_items(items: &[ItemSummary], id: &str) -> Option<RelatedItems> {
         .cloned()
         .collect();
 
-    let siblings: Vec<ItemSummary> = items
-        .iter()
-        .filter(|item| {
-            item.id.0 != id
-                && item.parent_id.is_none()
-                && !item.kind.is_member()
-                && item.path == target.path
-        })
-        .cloned()
-        .collect();
+    // 成员条目的兄弟是同父条目下的其它成员；顶层条目的兄弟是同模块的其它顶层条目。
+    let siblings: Vec<ItemSummary> = match target.parent_id.as_deref() {
+        Some(parent_id) => items
+            .iter()
+            .filter(|item| item.id.0 != id && item.parent_id.as_deref() == Some(parent_id))
+            .cloned()
+            .collect(),
+        None => items
+            .iter()
+            .filter(|item| {
+                item.id.0 != id
+                    && item.parent_id.is_none()
+                    && !item.kind.is_member()
+                    && item.path == target.path
+            })
+            .cloned()
+            .collect(),
+    };
 
     Some(RelatedItems {
         parent,

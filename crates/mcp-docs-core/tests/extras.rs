@@ -52,6 +52,12 @@ fn related_items_of_member_points_to_parent() {
         related.parent.as_ref().unwrap().id.0,
         "doc_probe::struct.Demo"
     );
+    // 成员条目的兄弟是同父下的其它成员（E-2.2）。
+    assert!(!related.siblings.is_empty(), "成员应有兄弟成员");
+    assert!(related
+        .siblings
+        .iter()
+        .all(|sibling| sibling.parent_id.as_deref() == Some("doc_probe::struct.Demo")));
 
     // 父条目应含子成员。
     let parent = related_items(&index.items, "doc_probe::struct.Demo").unwrap();

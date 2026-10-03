@@ -27,9 +27,9 @@ use tokio::sync::watch;
 use mcp_docs_core::MatchMode;
 use mcp_docs_core::{
     build, extract_code_blocks, extract_source_lines, find_trait_impl_paths, is_stale, load_index,
-    module_tree, parse_trait_impls, related_items, render_item, render_member_item, search_page,
-    BuildOptions, DocCache, DocItem, Granularity, IdIndex, Index, ItemKind, ItemSummary,
-    ParseOptions, RenderOptions, SearchQuery, INDEX_SCHEMA_VERSION,
+    module_tree, parse_trait_impls, related_items, render_item, render_member_item, rewrite_links,
+    search_page, BuildOptions, DocCache, DocItem, Granularity, IdIndex, Index, ItemKind,
+    ItemSummary, ParseOptions, RenderOptions, SearchQuery, INDEX_SCHEMA_VERSION,
 };
 
 /// `list_items` 的参数。
@@ -359,13 +359,10 @@ impl DocsServer {
 
         // 后台刷新索引；无论成功与否都要置位就绪，避免调用方永久等待。
         let worker = server.clone();
-        let building = server.building.clone();
         tokio::spawn(async move {
-            building.store(true, Ordering::Relaxed);
             if let Err(err) = worker.refresh_index(!has_index).await {
                 eprintln!("后台构建索引失败：{err:#}");
             }
-            building.store(false, Ordering::Relaxed);
             // 构建完成后通知客户端刷新资源清单（若已捕获到 peer）。
             worker.notify_resources_changed().await;
             let _ = ready_tx.send(true);
@@ -395,6 +392,15 @@ impl DocsServer {
             return Ok(());
         }
 
+        // 只有确实要构建时才置位，避免 no-op 刷新期间 building 短暂为真（E-3.1）。
+        self.building.store(true, Ordering::Relaxed);
+        let outcome = self.build_into_memory().await;
+        self.building.store(false, Ordering::Relaxed);
+        outcome
+    }
+
+    /// 全量构建并替换内存索引（不含 building 状态管理）。
+    async fn build_into_memory(&self) -> anyhow::Result<()> {
         let doc_dir = self.doc_dir.clone();
         let out_dir = self.out_dir.clone();
         // 解析/渲染是 CPU 密集的，放到阻塞线程池，别占着 async 执行器。
@@ -703,7 +709,6 @@ impl DocsServer {
             .map(|krate| {
                 serde_json::json!({
                     "name": krate.name,
-                    "version": krate.version,
                     "item_count": krate.item_count,
                 })
             })
@@ -843,9 +848,36 @@ impl DocsServer {
 
     /// `get_examples` 的同步实现。
     fn get_examples_blocking(&self, params: GetExamplesParams) -> Result<String, String> {
-        let markdown = self.render_full_markdown(&params.id)?;
+        let index = self.index();
+        let summary = index
+            .find(&params.id)
+            .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
+        let item = self.load_item(summary)?;
+
+        // 只从文档正文抽取示例，排除条目/成员的签名代码块（E-1.2）。
+        let mut text = String::new();
+        if summary.kind.is_member() {
+            if let Some(member) = item.members.iter().find(|member| member.id == summary.id) {
+                if let Some(docs) = &member.docs_md {
+                    text.push_str(docs);
+                    text.push('\n');
+                }
+            }
+        } else {
+            if let Some(docs) = &item.docs_md {
+                text.push_str(docs);
+                text.push_str("\n\n");
+            }
+            for member in &item.members {
+                if let Some(docs) = &member.docs_md {
+                    text.push_str(docs);
+                    text.push_str("\n\n");
+                }
+            }
+        }
+
         let max_examples = params.max_examples.unwrap_or(5);
-        let examples: Vec<serde_json::Value> = extract_code_blocks(&markdown)
+        let examples: Vec<serde_json::Value> = extract_code_blocks(&text)
             .into_iter()
             .filter(|(language, _)| language.starts_with("rust"))
             .take(max_examples)
@@ -898,7 +930,7 @@ impl DocsServer {
             "id": params.id,
             "section": section.id,
             "title": section.title,
-            "body_md": section.body_md,
+            "body_md": rewrite_links(&section.body_md, options.link_style),
             "returned": members.len(),
             "members": members,
         })))
@@ -968,6 +1000,7 @@ impl DocsServer {
             .find(&params.id)
             .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
         let item = self.load_item(summary)?;
+        let options = RenderOptions::default();
 
         let sections: Vec<SectionOutput> = item
             .sections
@@ -975,7 +1008,7 @@ impl DocsServer {
             .map(|section| SectionOutput {
                 id: section.id.clone(),
                 title: section.title.clone(),
-                body_md: section.body_md.clone(),
+                body_md: rewrite_links(&section.body_md, options.link_style),
             })
             .collect();
         let members: Vec<MemberOutput> = item
@@ -1000,7 +1033,10 @@ impl DocsServer {
             name: item.name.clone(),
             path: item.path.clone(),
             signature: item.signature.clone(),
-            docs_md: item.docs_md.clone(),
+            docs_md: item
+                .docs_md
+                .as_deref()
+                .map(|md| rewrite_links(md, options.link_style)),
             source,
             sections,
             members,
@@ -1701,6 +1737,8 @@ mod tests {
         assert!(status.item_count > 0);
         assert_eq!(status.granularity, "member");
         assert!(status.ready);
+        // 已有索引且不 stale 时后台刷新为 no-op，不应标记 building（E-3.1）。
+        assert!(!status.building);
     }
 
     /// `batch_get_items` 对 ids 数量设上限。
@@ -1734,6 +1772,13 @@ mod tests {
             .unwrap();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert!(value["returned"].as_u64().unwrap() >= 1);
+        // 示例应来自文档正文，不含签名块（E-1.2）。
+        let first = value["examples"][0]["code"].as_str().unwrap();
+        assert!(first.contains("doc_probe::Demo"), "示例内容：{first}");
+        assert!(
+            !first.starts_with("pub struct"),
+            "签名不应作为示例：{first}"
+        );
     }
 
     /// `find_by_signature` 能按签名子串命中。

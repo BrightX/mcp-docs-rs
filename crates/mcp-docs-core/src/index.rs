@@ -149,7 +149,6 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
         .enumerate()
         .map(|(index, name)| CrateSummary {
             name,
-            version: None,
             item_count: crate_counts[index],
         })
         .collect();

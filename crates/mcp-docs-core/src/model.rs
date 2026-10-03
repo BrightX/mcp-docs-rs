@@ -306,8 +306,6 @@ pub struct ItemSummary {
 pub struct CrateSummary {
     /// crate 名。
     pub name: String,
-    /// crate 版本（暂未采集）。
-    pub version: Option<String>,
     /// 条目数（含成员）。
     pub item_count: usize,
 }
@@ -358,4 +356,4 @@ pub struct Index {
 /// - 4：无真实文档的条目不再返回 rustdoc 占位摘要。
 /// - 5：新增导出粒度 `granularity`；发现阶段启用 `all.html` 交叉校验兜底。
 /// - 6：`ItemSummary` 新增 `signature`，供 `find_by_signature` 按签名检索。
-pub const INDEX_SCHEMA_VERSION: u32 = 6;
+pub const INDEX_SCHEMA_VERSION: u32 = 7;
