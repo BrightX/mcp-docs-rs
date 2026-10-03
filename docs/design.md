@@ -117,7 +117,7 @@ pub struct ItemSummary {             // 索引条目（不含正文，Agent 先�
     file: String, anchor: Option<String>, source: Option<String>,
 }
 
-pub struct CrateSummary { name: String, version: Option<String>, item_count: usize }
+pub struct CrateSummary { name: String, item_count: usize }
 
 pub struct Fingerprint { file_count: u64, max_mtime: u64, size_sum: u64, crates_js_hash: u64 }
 
@@ -273,12 +273,12 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 
 ```json
 {
-  "schema_version": 5,
+  "schema_version": 7,
   "rustdoc_version": "1.98.1 (48a229cea 2026-09-01)",
   "generated_at": 1790853560,
   "target_doc": "D:\\RustProjects\\mcp-docs-rs\\target\\doc",
   "granularity": "member",
-  "crates": [{ "name": "doc_probe", "version": null, "item_count": 11 }],
+  "crates": [{ "name": "doc_probe", "item_count": 11 }],
   "items": [
     { "id": "doc_probe::struct.Demo", "kind": "struct", "name": "Demo",
       "path": ["doc_probe"], "one_line": "A demo struct.", "has_docs": true,

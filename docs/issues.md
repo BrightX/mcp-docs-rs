@@ -25,13 +25,13 @@
 | 编号 | 严重度 | 标题 | 状态 |
 |---|---|---|---|
 | [E-1.1](#e-11) | P1 | `get_item_section` 拿不到文档分节（examples/panics 等） | ✅ 已修复 |
-| [E-1.2](#e-12) | P2 | `get_examples` 把签名块当示例返回 | ⬜ 待修复 |
+| [E-1.2](#e-12) | P2 | `get_examples` 把签名块当示例返回 | ✅ 已修复 |
 | [E-2.1](#e-21) | P1 | `get_trait_implementors` 对 re-export 的 trait 失效 | ✅ 已修复 |
-| [E-2.2](#e-22) | P2 | `get_related_items` 对成员条目返回全空 | ⬜ 待修复 |
-| [E-3.1](#e-31) | P2 | `index_status.building` 恒为 `true` | ⬜ 待修复 |
-| [E-3.2](#e-32) | P2 | `get_item_json.docs_md` 未重写链接 | ⬜ 待修复 |
-| [E-3.3](#e-33) | P2 | `list_crates` 的 `version` 恒为 `null` | ⬜ 待修复 |
-| [E-4.1](#e-41) | P3 | JSON Schema 使用非标准 `format`（uint/uint32/uint64） | ⬜ 待修复 |
+| [E-2.2](#e-22) | P2 | `get_related_items` 对成员条目返回全空 | ✅ 已修复 |
+| [E-3.1](#e-31) | P2 | `index_status.building` 恒为 `true` | ✅ 已修复 |
+| [E-3.2](#e-32) | P2 | `get_item_json.docs_md` 未重写链接 | ✅ 已修复 |
+| [E-3.3](#e-33) | P2 | `list_crates` 的 `version` 恒为 `null` | ✅ 已修复 |
+| [E-4.1](#e-41) | P3 | JSON Schema 使用非标准 `format`（uint/uint32/uint64） | ⛔ 不修复 |
 
 ---
 
@@ -67,6 +67,10 @@ tools/call get_item_section {"id":"anstream::macro.eprint","section":"examples"}
 
 **影响**：示例列表混入非示例内容。
 
+**修复**：`get_examples` 改为只从条目文档正文与成员文档抽取示例，排除签名代码块。
+
+**验证**：`get_examples{id:"tokio::task::fn.spawn"}` 首个示例为文档中的真实示例，不以 `pub fn` 开头。
+
 ## 2. 导航与关系
 
 ### E-2.1
@@ -99,6 +103,10 @@ tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → co
 
 **影响**：关系导航对成员条目形同虚设。
 
+**修复**：`related_items` 中成员条目的 `siblings` 改为「同父条目下的其它成员」，顶层条目保持「同模块顶层条目」。
+
+**验证**：`get_related_items{id:"tokio::runtime::struct.Runtime::method.spawn"}` 返回 8 个兄弟方法。
+
 ## 3. MCP 接口
 
 ### E-3.1
@@ -107,11 +115,13 @@ tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → co
 
 **现象**：`ready:true`、`stale:false`、`item_count:18922` 时 `building` 仍为 `true`（多次复查一致）。
 
-**根因**：`server.rs::index_status_blocking` 直接读 `self.building`，疑似后台刷新路径未在「无需刷新」时复位（`building` 初值 `false`）。
+**根因**：`server.rs` 的后台刷新任务**无条件**先置 `building=true`，即便刷新是 no-op（指纹未变）；`index_status` 在启动后立即查询时读到该瞬时值。
 
 **影响**：误导 Agent 认为索引仍在构建。
 
-**状态**：⬜ 待修复（需先确认 `refresh_index` 的复位时序）。
+**修复**：把 `building` 置位移入 `refresh_index` 的「确实需要构建」分支；no-op 刷新不再置位。
+
+**验证**：`index_status` 在已有索引且不 stale 时返回 `building:false`。
 
 ### E-3.2
 
@@ -123,6 +133,10 @@ tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → co
 
 **影响**：字段名 `docs_md` 却给 HTML 链接，与其它输出不一致，客户端需自行处理。
 
+**修复**：`get_item_json` 的 `docs_md`、以及 `get_item_json` / `get_item_section` 的分节 `body_md` 均过 `rewrite_links`。
+
+**验证**：`get_item_json{id:"tokio::task::fn.spawn"}` 的 `docs_md` 链接为 `.md`，无 `.html`。
+
 ### E-3.3
 
 **标题**：`list_crates` 的 `version` 恒为 `null`
@@ -130,6 +144,10 @@ tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → co
 **根因**：rustdoc 产物不含 crate 版本，`CrateSummary.version` 无数据来源（`model.rs`）。
 
 **影响**：字段无信息量；Agent 无法据此判断 crate 版本。
+
+**修复**：移除 `CrateSummary.version`（rustdoc 产物无版本来源，保留恒 `null` 只会误导），`INDEX_SCHEMA_VERSION` 6 → 7。
+
+**验证**：`list_crates` 输出的 crate 项仅含 `name` / `item_count`。
 
 ## 4. 协议与可移植性
 
@@ -142,6 +160,8 @@ tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → co
 **根因**：rmcp / schemars 为 `usize` / `u64` / `u32` 生成 `format: "uint*"`（`tools/list` 输出）。
 
 **影响**：严格客户端可能拒绝或忽略这些约束。
+
+**结论**：⛔ 不修复。`format: uint*` 是上游 `schemars` 对整数的既定输出（OpenAPI 风格），非本项目逻辑缺陷；消除它需为每个数值字段手写 JSON Schema，收益不抵复杂度。Inspector 报告为 `0 errors, 33 warnings`，主流客户端忽略未知 `format`。若未来接入严格校验客户端再处理。
 
 ---
 
