@@ -33,8 +33,8 @@
 | [E-3.2](#e-32) | P2 | `get_item_json.docs_md` 未重写链接 | ✅ 已修复 |
 | [E-3.3](#e-33) | P2 | `list_crates` 的 `version` 恒为 `null` | ✅ 已修复 |
 | [E-4.1](#e-41) | P3 | JSON Schema 使用非标准 `format`（uint/uint32/uint64） | ⛔ 不修复 |
-| [E-3.4](#e-34) | P1 | `search_docs` 在未导出正文时静默返回空 | ⬜ 待修复 |
-| [E-3.5](#e-35) | P2 | 资源条目 URI 的 item 段写法易错 | ⬜ 待修复 |
+| [E-3.4](#e-34) | P1 | `search_docs` 在未导出正文时静默返回空 | ✅ 已修复 |
+| [E-3.5](#e-35) | P2 | 资源条目 URI 的 item 段写法易错 | ✅ 已修复 |
 | [E-3.6](#e-36) | P2 | 工具与资源/prompt 的错误模型不一致 | ⬜ 待修复 |
 | [E-4.2](#e-42) | P3 | `Option<T>` 参数生成 `type:[T,"null"]` 联合类型 | ⬜ 待修复 |
 | [E-4.3](#e-43) | P3 | 枚举候选值未暴露为 schema `enum` | ⬜ 待修复 |

@@ -933,4 +933,63 @@ mod tests {
             .await
             .is_err());
     }
+
+    /// 资源条目 id 容错：`struct/Demo`（把 kind 与 name 间的点误写成斜杠）也能命中。
+    #[tokio::test]
+    async fn resource_item_tolerates_kind_slash() {
+        let (server, _out) = server_with_index();
+
+        // 误写成 `struct/Demo` 也应命中（容错）。
+        let tolerant = server
+            .read_uri("rustdoc://doc_probe/struct/Demo")
+            .await
+            .unwrap();
+        assert!(tolerant.contains("Demo"));
+
+        // 标准写法（保留点号）仍可用。
+        let standard = server
+            .read_uri("rustdoc://doc_probe/struct.Demo")
+            .await
+            .unwrap();
+        assert!(standard.contains("Demo"));
+
+        // 模块分隔的斜杠写法仍可用。
+        let nested = server
+            .read_uri("rustdoc://doc_probe/inner/struct.Nested")
+            .await
+            .unwrap();
+        assert!(nested.contains("Nested"));
+    }
+
+    /// `search_docs` 在未导出 markdown 时给出明确提示，而非静默空结果（P1）。
+    #[tokio::test]
+    async fn search_docs_hints_when_no_markdown() {
+        let out = tempfile::tempdir().unwrap();
+        // 内存构建：只写索引，不写 markdown。
+        build(
+            &fixture_root(),
+            out.path(),
+            &BuildOptions {
+                persist: true,
+                write_markdown: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let server = single_project(fixture_root(), out.path().to_path_buf());
+        let project = default_project(&server);
+        project.ensure_ready().await;
+
+        let err = project
+            .search_docs_blocking(SearchDocsParams {
+                query: "Demo".to_string(),
+                crate_name: None,
+                kind: None,
+                limit: None,
+                offset: None,
+                project: None,
+            })
+            .unwrap_err();
+        assert!(err.contains("export"), "应提示先导出正文：{err}");
+    }
 }

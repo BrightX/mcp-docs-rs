@@ -638,14 +638,33 @@ impl Project {
 
     /// 解析 `rustdoc://{crate}/{item}` 形式的条目并返回其 markdown。
     pub(crate) fn render_uri_item(&self, crate_name: &str, item: &str) -> Result<String, McpError> {
-        let wanted = format!("{crate_name}::{}", item.replace('/', "::"));
-        // 条目 id 带类型标记（如 `rmcp::attr.tool_router`），
-        // 这里同时接受省略标记的写法（`rmcp::tool_router`）。
-        let id = self
-            .index()
-            .find(&wanted)
-            .map(|summary| summary.id.0.clone())
-            .ok_or_else(|| McpError::invalid_params(format!("未找到条目 `{wanted}`"), None))?;
+        // 条目 id 形如 `crate::mod::…::kind.name`：URI 里模块分隔 `::` 写作 `/`，
+        // 但 kind 与 name 之间的 `.` 必须保留。为容错，依次尝试几种归一化写法：
+        //   1) 全部 `/` → `::`（标准写法，如 `inner/struct.Nested`）
+        //   2) 最后一个 `/` 视作 kind 与 name 的分隔（如把 `struct.Demo` 误写成 `struct/Demo`）
+        //   3) 全部 `/` → `.`
+        let mut candidates = vec![format!("{crate_name}::{}", item.replace('/', "::"))];
+        if let Some(pos) = item.rfind('/') {
+            let head = item[..pos].replace('/', "::");
+            let tail = &item[pos + 1..];
+            let sep = if head.is_empty() { "" } else { "::" };
+            candidates.push(format!("{crate_name}{sep}{head}.{tail}"));
+        }
+        candidates.push(format!("{crate_name}::{}", item.replace('/', ".")));
+        candidates.dedup();
+
+        let resolved = {
+            let index = self.index();
+            candidates
+                .iter()
+                .find_map(|wanted| index.find(wanted).map(|summary| summary.id.0.clone()))
+        };
+        let id = resolved.ok_or_else(|| {
+            McpError::invalid_params(
+                format!("未找到条目 `{crate_name}::{}`", item.replace('/', "::")),
+                None,
+            )
+        })?;
         self.get_item_blocking(ItemParams {
             id,
             max_bytes: None,
@@ -1157,6 +1176,9 @@ impl Project {
         let mut seen = std::collections::HashSet::new();
         let mut matched = 0usize;
         let mut hits = Vec::new();
+        // 统计"应扫描的正文文件数"与"实际读到"的数量，用于区分"无匹配"与"正文缺失"。
+        let mut candidates = 0usize;
+        let mut read_ok = 0usize;
         for item in index
             .items
             .iter()
@@ -1168,9 +1190,11 @@ impl Project {
             if !seen.insert(item.file.as_str()) {
                 continue;
             }
+            candidates += 1;
             let Ok(text) = fs::read_to_string(self.out_dir.join(&item.file)) else {
                 continue;
             };
+            read_ok += 1;
             let Some(snippet) = snippet_around(&text, &needle) else {
                 continue;
             };
@@ -1186,6 +1210,16 @@ impl Project {
             if hits.len() >= limit {
                 break;
             }
+        }
+
+        // 一个正文文件都读不到：多半是还没导出 markdown（server 内存构建不落盘 md）。
+        // 此时返回空结果会让调用方误判为"无匹配"，故显式提示。
+        if read_ok == 0 && candidates > 0 {
+            return Err(format!(
+                "未找到已导出的 markdown 正文（输出目录 {}）；请先运行 `mcp-docs export` 生成正文，\
+                 或改用 search_items / get_item 检索索引内容。",
+                self.out_dir.display()
+            ));
         }
 
         Ok(to_json(&serde_json::json!({
