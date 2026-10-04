@@ -19,6 +19,7 @@
 2. [导航与关系](#2-导航与关系)
 3. [MCP 接口](#3-mcp-接口)
 4. [协议与可移植性](#4-协议与可移植性)
+5. [存储与共享库](#5-存储与共享库)
 
 ## 索引
 
@@ -32,6 +33,12 @@
 | [E-3.2](#e-32) | P2 | `get_item_json.docs_md` 未重写链接 | ✅ 已修复 |
 | [E-3.3](#e-33) | P2 | `list_crates` 的 `version` 恒为 `null` | ✅ 已修复 |
 | [E-4.1](#e-41) | P3 | JSON Schema 使用非标准 `format`（uint/uint32/uint64） | ⛔ 不修复 |
+| [E-3.4](#e-34) | P1 | `search_docs` 在未导出正文时静默返回空 | ⬜ 待修复 |
+| [E-3.5](#e-35) | P2 | 资源条目 URI 的 item 段写法易错 | ⬜ 待修复 |
+| [E-3.6](#e-36) | P2 | 工具与资源/prompt 的错误模型不一致 | ⬜ 待修复 |
+| [E-4.2](#e-42) | P3 | `Option<T>` 参数生成 `type:[T,"null"]` 联合类型 | ⬜ 待修复 |
+| [E-4.3](#e-43) | P3 | 枚举候选值未暴露为 schema `enum` | ⬜ 待修复 |
+| [E-5.1](#e-51) | P3 | 默认写入全局共享库且无上限 / GC | ⬜ 待修复 |
 
 ---
 
@@ -135,6 +142,48 @@ tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → co
 
 **验证**：`list_crates` 输出的 crate 项仅含 `name` / `item_count`。
 
+### E-3.4 <a id="e-34"></a>`search_docs` 在未导出正文时静默返回空
+
+**现象**：不先运行 `mcp-docs export` 时，`search_docs` 永远返回 `{"hits":[],"returned":0}`，无任何提示。
+
+**复现**：
+```
+# 仅启动 server（后台为内存构建，不写 markdown）
+tools/call search_docs {"query":"Demo"}  → hits:[]
+# 运行 mcp-docs export 生成正文档后
+tools/call search_docs {"query":"Demo"}  → 命中
+```
+
+**根因**：`search_docs` 扫描 `out_dir` 下已导出的 markdown，而 server 后台构建 `write_markdown=false` 不落盘 md；`search_docs_blocking` 对读文件失败直接 `continue`（`crates/mcp-docs-server/src/project.rs`）。
+
+**影响**：Agent 会把「正文缺失」误判为「无匹配内容」，该工具在纯 server 场景形同失效。
+
+**修复**：扫描范围内一个可读 md 都没有（`read_ok == 0 && candidates > 0`）时返回明确提示，指引先 `export` 或改用 `search_items` / `get_item`；正常无匹配仍返回空 `hits`。
+
+**验证**：构造仅含索引、无 md 的输出目录 → `search_docs` 返回提示；`export` 后同查询返回命中。
+
+### E-3.5 <a id="e-35"></a>资源条目 URI 的 item 段写法易错
+
+**现象**：`rustdoc://doc_probe/struct/Demo` 报「未找到条目 `doc_probe::struct::Demo`」，需写成 `rustdoc://doc_probe/struct.Demo` 才命中。
+
+**根因**：条目 id 形如 `crate::…::kind.name`，URI 把 item 段里的 `/` 一律映射为 `::`，但 kind 与 name 之间的 `.` 必须保留；文档示例 `tokio/task/spawn`（恰好是省略 kind 的 id）掩盖了该细节（`crates/mcp-docs-server/src/project.rs::render_uri_item`）。
+
+**影响**：客户端按直觉把 `::` 全换成 `/` 时命中失败。
+
+**修复**：`render_uri_item` 对 item 段依次尝试多种归一化（`/`→`::`、最后一个 `/`→`.`、`/`→`.`），命中即用。
+
+**验证**：`rustdoc://doc_probe/struct/Demo`（容错）、`rustdoc://doc_probe/struct.Demo`（标准）、`rustdoc://doc_probe/inner/struct.Nested`（模块斜杠）均能命中。
+
+### E-3.6 <a id="e-36"></a>工具与资源/prompt 的错误模型不一致
+
+**现象**：工具业务错误返回 `isError:true` + 可读文本；资源 / prompt 错误走 JSON-RPC `error`（如读不到条目时返回 `{"error":...}`）。
+
+**根因**：工具用 `Result<String,String>`（由 rmcp 转为 `isError`），资源 / prompt 用 `McpError`（`crates/mcp-docs-server/src/server.rs`）。
+
+**影响**：同一类「未找到」错误在两类入口表现不同，Agent 处理方式不一致。
+
+**建议**：评估统一策略（资源「未找到」改为可读内容，或统一错误文案）。
+
 ## 4. 协议与可移植性
 
 ### E-4.1 <a id="e-41"></a>JSON Schema 使用非标准 `format`（uint / uint32 / uint64）
@@ -146,6 +195,34 @@ tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → co
 **影响**：严格客户端可能拒绝或忽略这些约束。
 
 **结论**：⛔ 不修复。`format: uint*` 是上游 `schemars` 对整数的既定输出（OpenAPI 风格），非本项目逻辑缺陷；消除它需为每个数值字段手写 JSON Schema，收益不抵复杂度。Inspector 报告为 `0 errors, 33 warnings`，主流客户端忽略未知 `format`。若未来接入严格校验客户端再处理。
+
+### E-4.2 <a id="e-42"></a>`Option<T>` 参数生成 `type:[T,"null"]` 联合类型
+
+**现象**：Inspector `tools/list --strict` 报告 50 处 `type` 为数组（`["string","null"]` / `["integer","null"]`），覆盖各工具的 `project` 等可选参数。
+
+**根因**：rmcp / schemars（1.2.2）对 `Option<T>` 生成含 `null` 的联合 `type`（`crates/mcp-docs-server/src/project.rs` 各 `*Params`）。
+
+**影响**：把工具 schema 映射到单一 `type` 方言的客户端（如 Gemini function declarations / OpenAPI 子集）可能拒绝该工具或丢约束。与 E-4.1（非标准 `format`）同源，但可独立处理。
+
+**建议**：让可选参数生成 `anyOf`，或"非 required 的单一类型"（缺省即 None）。
+
+### E-4.3 <a id="e-43"></a>枚举候选值未暴露为 schema `enum`
+
+**现象**：`search_items.mode`（`substring|prefix|fuzzy`）在 schema 中是裸 `string`，客户端无法得知合法取值。
+
+**根因**：`SearchItemsParams.mode` 为 `Option<String>`（`crates/mcp-docs-server/src/project.rs`）。
+
+**建议**：为 `mode` 生成 schema `enum`；`kind` 取值多且支持前缀（`fn`）/自然名（`function`），暂不收敛为 enum，靠描述提示。
+
+## 5. 存储与共享库
+
+### E-5.1 <a id="e-51"></a>默认写入全局共享库且无上限 / GC
+
+**现象**：单项目运行 server 也会把共享库写到平台缓存目录（`default_store_root`）；真实项目首次可达数百 MB，且无上限 / 淘汰，用户无感知。
+
+**根因**：`crates/mcp-docs-server/src/config.rs`（及 CLI）使 `store` 缺省回落到平台缓存目录。
+
+**建议**：文档提示；或增加 `--no-store` / 尺寸上限 / 统计输出。
 
 ---
 
