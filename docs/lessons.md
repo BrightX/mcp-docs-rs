@@ -211,6 +211,24 @@
 **对**：导出粒度（`member` / `item`）会改变成员摘要的 `file`（指向成员文件还是父文件），而增量复用是**整条复用旧的 `ItemSummary`**；切换粒度后复用旧索引会得到与当前产物不一致的 `file`，且 `item→member` 方向不会补写成员文件。修复：加载旧索引时校验 `schema_version` 与 `granularity`，任一不符即全量重建。顺带修掉了「CLI `--incremental` 从不校验 schema」的隐患（此前只有 server 的 `is_stale` 校验）。
 **相关**：`index.rs::build`（增量守卫）、`model.rs::Granularity`
 
+### #3.2 共享库身份键不能含 mtime
+
+**错**：直接复用现有产物指纹（`Fingerprint{file_count,max_mtime,size_sum}`）做跨项目复用键。
+**对**：跨项目复用的前提是「两个项目里同一 crate 的文档可判为同一份」，而各项目各自 `target/doc` 副本的 **mtime 不同**，含 mtime 会导致永远无法命中。改用只 stat、不含 mtime 的 `CrateStat{file_count,size_sum}`，并叠加 crate 名 / 版本 / rustdoc 版本 / 粒度构成身份键。`file_count+size_sum` 是弱指纹（无内容哈希），用 crate 版本兜底；如需更强可并入 `sidebar-items.js` 哈希。
+**相关**：`shared.rs::{key_dir_name,CrateStat,crate_scan}`、`design.md` §6
+
+### #3.3 复用条目的 `src_mtime` 必须按本项目回填
+
+**错**：把共享库里的 `ItemSummary` 原样复用回项目索引。
+**对**：`src_mtime` 是增量判断的依据（`summary.src_mtime == mtime`）。共享库里的 mtime 来自**产出它的项目**，直接复用会让本项目的增量比对永远不成立、每次都重新解析全部条目。修复：复用同一趟 `crate_scan` 得到的 `html_path → mtime` 映射，按本项目 mtime 回填。
+**相关**：`shared.rs::load_reused`、`index.rs::build`
+
+### #3.4 多进程并发写共享库会撕裂临时文件
+
+**错**：`atomic_write` 用固定名 `xxx.tmp` 作中转。
+**对**：多个项目（甚至多进程）可能并发写同一共享库条目，固定临时名会互相覆盖/撕裂。改为进程唯一临时名（`pid` + 单调序号）。另：共享库条目的 `meta.json` **最后写**，作为「已完整落盘」的提交标记，缺它即视为半成品并忽略。
+**相关**：`store.rs::unique_tmp_path`、`shared.rs::write_entry`
+
 ## 4. MCP 接口
 
 ### #4.1 过滤器参数无法识别时必须报错，不能静默忽略

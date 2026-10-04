@@ -84,9 +84,10 @@ batch_get_items(ids=["tokio::task::fn.spawn", "tokio::task::fn.sleep"], max_byte
 resources/read rustdoc://crates
 resources/read rustdoc://tokio?offset=0&limit=100
 resources/read rustdoc://tokio/task/spawn      # 注意用 / 代替 ::
+resources/read rustdoc://tokio?project=svc     # 指定项目
 ```
 
-要点：资源适合「一次拿一块」的场景；`rustdoc://{crate}` 的 `limit` 上限 500，大 crate 请分页或用 `list_items`。
+要点：资源适合「一次拿一块」的场景；`rustdoc://{crate}` 的 `limit` 上限 500，大 crate 请分页或用 `list_items`。多项目时用 `?project=NAME` 选择项目。
 
 ## §8 用 prompts 起头
 
@@ -101,7 +102,7 @@ prompts/get usage_example { id: "tokio::task::fn.spawn" }
 
 ```
 index_status()
-  → { ready: true, building: false, schema_version: 6, item_count: 12000, stale: false, ... }
+  → { project: "default", ready: true, building: false, schema_version: 7, item_count: 12000, stale: false, ... }
 
 rebuild_index()          # 默认增量
 rebuild_index(force=true) # 全量
@@ -109,7 +110,30 @@ rebuild_index(force=true) # 全量
 
 要点：若 `ready=false` 且 `building=true`，说明后台正在构建，工具/资源会等待；`stale=true` 表示产物已变、下次访问会触发刷新。
 
-## §10 CLI 兜底（未接 MCP）
+## §11 多项目
+
+服务可同时管理多个项目；不知道有哪些项目时先查：
+
+```
+list_projects()
+  → projects: [{ name: "core", is_default: true, ready: true, ... },
+               { name: "svc",  is_default: false, ready: false, building: true, ... }]
+```
+
+之后在任意工具/资源上带 `project` 指定：
+
+```
+search_items(query="spawn", crate="tokio", project="svc")
+get_item(id="tokio::task::fn.spawn", project="svc")
+resources/read rustdoc://tokio?project=svc
+```
+
+要点：
+- 省略 `project` 时用缺省项目（`list_projects` 里 `is_default=true` 的那个）。
+- 非缺省项目**首次访问时才后台构建**，首次调用该项目的工具会等待其就绪（可用 `index_status(project=...)` 查看 `ready` / `building`）。
+- 各项目共用一份共享依赖索引库：同一版本依赖（如 tokio）只解析渲染一次，跨项目复用，因此切换项目的额外成本很低。
+
+## §12 CLI 兜底（未接 MCP）
 
 ```bash
 cargo run -p mcp-docs-cli -- export --incremental
@@ -118,4 +142,4 @@ cargo run -p mcp-docs-cli -- show "tokio::task::fn.spawn"
 cargo run -p mcp-docs-cli -- tree
 ```
 
-要点：CLI 与 MCP 共享同一份 `index.json`；`export` 负责落盘 markdown 与索引。全局参数 `--doc-dir`（默认 `target/doc`）与 `--out`（默认 `target/doc-search`）。
+要点：CLI 与 MCP 共享同一份 `index.json`；`export` 负责落盘 markdown 与索引。全局参数 `--doc-dir`（默认 `target/doc`）、`--out`（默认 `target/doc-search`）、`--store`（共享索引库，默认平台缓存目录）。

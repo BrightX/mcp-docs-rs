@@ -5,12 +5,21 @@
 
 > 说明：`search_items` / `get_item_json` / `index_status` / `module_tree` 使用 MCP 结构化输出
 > （`structured_content` + `outputSchema`），同时保留等价的文本 JSON。
+>
+> **多项目**：全部工具都接受可选入参 `project`（省略时用缺省项目）。项目名可用 `list_projects` 查询。
+
+## 项目
+
+### list_projects
+- 参数：无。
+- 返回：`{ projects: [{ name, doc_dir, out_dir, is_default, ready, building, crate_count, item_count }] }`。
+- 不阻塞（未就绪项目计数为 0）；是 Agent 发现可用项目名的入口。
 
 ## 列表与检索
 
 ### list_crates
-- 参数：无。
-- 返回：`{ crates: [{ name, version, item_count }] }`。
+- 参数：`project?`。
+- 返回：`{ project, crates: [{ name, item_count }] }`。
 
 ### list_items
 - 参数：`crate?`（限定 crate）、`module?`（限定模块路径，按整段匹配）、`kind?`（条目类型）、
@@ -89,29 +98,32 @@
 ## 状态与维护
 
 ### index_status
-- 参数：无。
-- 返回（结构化）：`{ ready, building, schema_version, rustdoc_version, crate_count,
+- 参数：`project?`。
+- 返回（结构化）：`{ project, ready, building, schema_version, rustdoc_version, crate_count,
   item_count, granularity, doc_dir, out_dir, generated_at, stale }`。
 
 ### rebuild_index
-- 参数：`force?`（`true` 强制全量，默认增量）。
-- 返回：`{ rebuilt, reused, item_count }`。完成后会发资源变更通知。
+- 参数：`force?`（`true` 强制全量，默认增量）、`project?`。
+- 返回：`{ project, rebuilt, reused, shared_hits, item_count }`。完成后会发资源变更通知。
 
 ## 资源
 
 | URI | 内容 |
 |---|---|
-| `rustdoc://crates` | 所有 crate 的清单（同 `list_crates`） |
+| `rustdoc://crates` | 缺省项目的 crate 清单（同 `list_crates`） |
 | `rustdoc://{crate}` | 该 crate 的条目清单，支持 `?offset=N&limit=M`（limit 上限 500） |
 | `rustdoc://{crate}/{item}` | 某条目的 markdown；`/` 对应 `::`，id 可省略类型标记 |
 
-`rustdoc://{crate}` 返回：`{ crate, item_count, offset, limit, returned, truncated, items: [摘要] }`。
+以上 URI 均可追加 `?project=NAME` 指定项目（缺省回落默认项目），
+分页参数与 `project` 可共存，如 `rustdoc://tokio?project=svc&offset=0&limit=50`。
+
+`rustdoc://{crate}` 返回：`{ project, crate, item_count, offset, limit, returned, truncated, items: [摘要] }`。
 
 ## Prompts
 
 | 名称 | 入参 | 说明 |
 |---|---|---|
-| `explain_api` | `id` | 引导先读条目文档再解释用途与用法 |
-| `usage_example` | `id` | 引导先取文档与示例再给最小可运行示例 |
+| `explain_api` | `id`, `project?` | 引导先读条目文档再解释用途与用法 |
+| `usage_example` | `id`, `project?` | 引导先取文档与示例再给最小可运行示例 |
 
 两者均返回一条 `user` 角色的消息。

@@ -41,6 +41,8 @@ Agent 需要知道 `tokio::spawn` 的签名与用法 →
 | F8 | CLI 导出 | `export` / `tree` / `show` / `search` 子命令 |
 | F9 | MCP Server | 暴露工具与资源，stdio 传输 |
 | F10 | 增量与缓存 | 指纹判定是否需要重建；`--incremental` 时仅更新变化的条目 |
+| F11 | 单进程多项目 | 一个 `mcp-docs-server` 进程服务多个项目（多个 rustdoc 产物目录）；工具 / 资源用可选 `project` 参数定位项目，缺省用默认项目 |
+| F12 | 跨项目共享索引库 | 多个项目依赖同一 crate（如同一版本 tokio）时，其条目摘要与 markdown 只解析渲染一次，存入共享库被各项目复用 |
 
 ## 非功能需求
 
@@ -60,6 +62,7 @@ Agent 需要知道 `tokio::spawn` 的签名与用法 →
 | 工程结构 | 3-crate workspace：`mcp-docs-core`（纯库）/ `mcp-docs-cli` / `mcp-docs-server` |
 | 检索粒度 | 按条目分文件 + 全局索引；成员默认独立成文件**且**内联进父文件；`--granularity=item` 时成员仅内联、不落盘 |
 | 输出位置 | 可配置，默认项目内 `target/doc-search/`；CLI `--out` 与 server 启动参数可覆盖 |
+| 共享库位置 | 跨项目复用的索引库默认位于平台缓存目录（可用 `--store` / `MCP_DOCS_STORE` 覆盖）；键为「crate 名 + 版本 + rustdoc 版本 + 粒度 + stat 指纹」 |
 | MCP SDK | `rmcp`（官方 Rust SDK，当前 3.5.0），锁精确版本 |
 | 文档管理 | 需求 / 设计 / 进度文档统一放在 `docs/` 下 |
 
@@ -68,5 +71,7 @@ Agent 需要知道 `tokio::spawn` 的签名与用法 →
 - 不解析 rustdoc JSON，不依赖 nightly / bootstrap。
 - 不联网抓取 docs.rs。
 - 不提供全文检索引擎（如 tantivy）—— 先靠扁平索引 + 子串/前缀/模糊匹配满足需求。
+- 不做跨项目检索（一次查询覆盖所有项目的合并结果）—— 每个工具默认作用于单个项目。
+- 不做 RAG / 向量检索 —— 目标是对 API 条目做符号定位，词法匹配已足够。
 - 不做源码符号跳转/LSP 级能力（`get_item_source` 仅给源码位置）。
 - 不生成 HTML 站点或文档网站。

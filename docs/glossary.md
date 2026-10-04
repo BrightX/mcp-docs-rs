@@ -31,6 +31,11 @@
 | #1.19 | MCP 工具、tool | 暴露给 Agent 的检索能力 | `crates/mcp-docs-server/src/server.rs`（`#[tool]`） |
 | #1.20 | MCP 资源、resource | 以 `rustdoc://` URI 暴露的文档节点 | `server.rs`（`read_resource` / `list_resource_templates`） |
 | #1.21 | 成员文件名 | `{父stem}.{成员类型}.{成员名}.md`（类型用于避免同名冲突） | `store.rs::member_output_path` |
+| #1.22 | 共享库、store | 跨项目复用的 crate 索引库（条目摘要 + md） | `crates/mcp-docs-core/src/shared.rs`；默认根 `shared::default_store_root` |
+| #1.23 | 身份键、key | 判断「同一份 crate 文档」的键：名 + 版本 + rustdoc 版本 + 粒度 + stat 指纹 | `shared.rs::key_dir_name`；指纹 `shared.rs::CrateStat` / `crate_scan` |
+| #1.24 | 物化、materialize | 把共享库里的 md 硬链接（同卷）/ 复制（跨卷）到项目目录 | `shared.rs::{materialize_file, materialize_crate}` |
+| #1.25 | CratePlan、共享库规划 | 单 crate 的身份键 / 落盘位置 / 命中结果 | `shared.rs::CratePlan`；`shared.rs::plan` / `write_entry` |
+| #1.26 | 共享库命中 | 构建时某 crate 命中共享库、整体复用（不重新解析） | `shared.rs::CratePlan::is_hit`；`index.rs`（`shared_hits`） |
 
 ## 2. rustdoc 产物（输入数据）
 
@@ -84,3 +89,8 @@
 | #3.30 | 结构化输出 | 工具返回 `outputSchema` + `structured_content` | `rmcp::Json<T>`；`server.rs::{SummaryOutput,ItemDetailOutput,IndexStatusOutput,ModuleTreeNode}` |
 | #3.31 | prompts 模板 | 可复用提示模板 | `server.rs::{prompt_definitions,build_prompt}`；`list_prompts` / `get_prompt` |
 | #3.32 | 资源变更通知 | 索引变化后通知客户端刷新资源清单 | `server.rs::{remember_peer,notify_resources_changed}` |
+| #3.33 | 项目、Project | 单个项目的运行时状态（索引 / 缓存 / 就绪 / 懒启动） | `crates/mcp-docs-server/src/project.rs::Project` |
+| #3.34 | 项目解析、resolve | 由 `project` 名（或缺省）找到项目并确保启动 | `server.rs::DocsServer::resolve` |
+| #3.35 | 项目清单、list_projects | 列出全部项目及就绪状态（不阻塞） | `server.rs::list_projects` |
+| #3.36 | 启动配置 | 多项目启动参数解析（`--project` / `--projects-file` / `--store`） | `crates/mcp-docs-server/src/config.rs::resolve_config` |
+| #3.37 | 共享构建锁 | 串行化各项目全量构建，避免并发抢占资源 | `server.rs::from_projects`（`build_lock`）；`project.rs::refresh_index` |

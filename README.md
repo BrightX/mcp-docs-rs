@@ -11,7 +11,8 @@
 - **降噪**：剥离 rustdoc 的 UI 噪声、`§` 锚点、blanket / synthetic impl；代码块补 `rust` 语言标注。
 - **可检索**：按名字 / 路径 / 摘要检索并给出相关度得分，支持按 crate 与类型过滤。
 - **增量**：基于产物指纹与文件 mtime，只重建变化的部分。
-- **MCP 服务**：17 个工具 + `rustdoc://` 资源，stdio 传输，按需解析并缓存。
+- **多项目 + 共享索引库**：一个 server 进程服务多个项目；多个项目依赖同一 crate（如同一版本 tokio）时，只解析渲染一次、跨项目复用。
+- **MCP 服务**：18 个工具 + `rustdoc://` 资源，stdio 传输，按需解析并缓存。
 
 ## 快速开始
 
@@ -35,19 +36,31 @@ cargo run -p mcp-docs-cli -- search "spawn" --crate tokio
 | `mcp-docs export [--incremental] [--crate NAME] [--granularity member\|item]` | 导出 markdown + `index.json` + `meta.json` |
 | `mcp-docs search <query> [--limit] [--offset] [--mode] [--crate] [--kind]` | 检索条目 |
 
-全局参数：`--doc-dir`（默认 `target/doc`）、`--out`（默认 `target/doc-search`）。
+全局参数：`--doc-dir`（默认 `target/doc`）、`--out`（默认 `target/doc-search`）、`--store`（共享索引库，默认平台缓存目录，可加速依赖 crate 的导出）。
 
 ### MCP 服务
+
+单项目：
 
 ```bash
 cargo run -p mcp-docs-server -- --doc-dir target/doc --out-dir target/doc-search
 ```
 
-在 MCP 客户端中注册该命令即可使用。工具：
+多项目（共享一份依赖索引库）：
+
+```bash
+cargo run -p mcp-docs-server -- \
+  --project core=/repo/a/target/doc \
+  --project svc=/repo/b/target/doc \
+  --store ~/.cache/mcp-docs
+```
+
+在 MCP 客户端中注册该命令即可使用。除缺省项目外，其余项目**首次被访问时**才后台构建。工具：
 
 | 工具 | 用途 |
 |---|---|
-| `list_crates` | 列出已索引的 crate |
+| `list_projects` | 列出本服务当前服务的项目及就绪状态 |
+| `list_crates` | 列出某个项目已索引的 crate |
 | `list_items` | 列出条目摘要（按 crate / 模块 / 类型过滤，支持 `offset` 分页） |
 | `search_items` | 检索条目，返回轻量摘要与得分（支持 `offset` 分页） |
 | `get_item` | 读取条目的完整 markdown |
@@ -57,7 +70,7 @@ cargo run -p mcp-docs-server -- --doc-dir target/doc --out-dir target/doc-search
 | `batch_get_items` | 批量读取多个条目（ids 上限 20） |
 | `get_source_text` | 按源码位置读取源码文本（失败时回退为路径与行号） |
 | `get_item_json` | 返回条目的结构化 JSON |
-| `index_status` | 返回索引状态（就绪 / 构建中 / schema / 版本 / 计数 / 是否过期） |
+| `index_status` | 返回某个项目的索引状态（就绪 / 构建中 / schema / 版本 / 计数 / 是否过期） |
 | `module_tree` | 返回 crate 的模块树（含每级条目数） |
 | `get_related_items` | 返回条目的父条目、兄弟与子成员 |
 | `get_trait_implementors` | 列出实现了某个 trait 的类型 |
@@ -65,7 +78,9 @@ cargo run -p mcp-docs-server -- --doc-dir target/doc --out-dir target/doc-search
 | `search_docs` | 在已导出的 markdown 正文里全文检索 |
 | `rebuild_index` | 重建索引（默认增量） |
 
-资源：`rustdoc://crates`、`rustdoc://{crate}`（支持 `?offset=&limit=` 分页）、`rustdoc://{crate}/{item}`。
+多项目时，上述工具都接受可选入参 `project`（省略则用缺省项目）。
+
+资源：`rustdoc://crates`、`rustdoc://{crate}`（支持 `?offset=&limit=` 分页）、`rustdoc://{crate}/{item}`；均可加 `?project=NAME` 指定项目。
 
 Prompts：`explain_api` / `usage_example`（入参 `id`，引导模型先读文档再作答）。结构化输出：`search_items` / `get_item_json` / `index_status` / `module_tree` 返回带 `outputSchema` 的结构化内容（同时保留文本）。通知：后台构建完成或 `rebuild_index` 后发送 `notifications/resources/list_changed`。
 

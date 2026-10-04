@@ -67,6 +67,7 @@ d:\RustProjects\mcp-docs-rs\
 │   │   │   ├── index.rs               # index.json 构建/读写
 │   │   │   ├── store.rs               # 磁盘布局、原子写、文件名编码
 │   │   │   ├── cache.rs               # 指纹 + 内存缓存 + 增量
+│   │   │   ├── shared.rs              # 跨项目共享索引库（身份键 / 复用 / 物化）
 │   │   │   └── search.rs              # 索引内检索与排序
 │   │   └── tests\
 │   │       ├── fixtures\doc_probe\    # 从 temp 裁剪拷贝的真实产物（非 ignored 路径）
@@ -74,11 +75,13 @@ d:\RustProjects\mcp-docs-rs\
 │   ├── mcp-docs-cli\                  # clap，无 tokio
 │   │   └── src\main.rs
 │   └── mcp-docs-server\               # rmcp + tokio
-│       └── src\{main.rs, server.rs, resources.rs}
+│       └── src\{main.rs, server.rs, project.rs, config.rs}
 └── temp\                              # 实测用的 doc_probe 项目（.gitignore 已忽略）
 ```
 
 **为什么是 3-crate workspace**：`rmcp + tokio` 依赖图很重，而 CLI 与核心库完全不需要 async。拆开后 `cargo test -p mcp-docs-core` 秒级完成，core 也可被其他项目嵌入；`rmcp` 类型只出现在 server crate，API 漂移的影响面被隔离。
+
+**server 模块划分（M11 起）**：`server.rs` 只做「项目注册表 + `#[tool]` 转发 + 资源/prompts」；`project.rs` 承载单个项目的运行时状态（索引 / 缓存 / 就绪信号 / 全部 `*_blocking` 实现）；`config.rs` 解析多项目启动参数。
 
 `[workspace.dependencies]` 集中声明：`scraper`、`htmd`、`serde`、`serde_json`、`walkdir`、`thiserror`、`anyhow`、`tracing`、`clap`、`rmcp`、`tokio`；dev：`insta`、`assert_cmd`、`tempfile`。
 
@@ -296,6 +299,27 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 
 > 产物指纹与 schema 版本另存于 `meta.json`（判定重建时无需反序列化大 index）。
 
+**跨项目共享索引库（M11）**
+
+多个项目依赖同一 crate（如同一版本 tokio）时，其条目摘要与 markdown 只解析渲染一次，存入共享库被各项目复用。
+
+```
+<store_root>/                          # 默认平台缓存目录（--store / MCP_DOCS_STORE 覆盖）
+└── shared/
+    └── <key_dir>/                     # key = {crate}-{version}-{hash8}
+        ├── meta.json                  # 身份字段 + schema + 时间（最后写；缺它视为半成品）
+        ├── items.json                 # 该 crate 的 Vec<ItemSummary>
+        └── md/<crate>/...             # 渲染的 md，与项目 out_root/<crate>/ 逐字符同构
+```
+
+- **身份键**：`{crate 名}\0{版本}\0{rustdoc 版本}\0{粒度}\0{file_count}\0{size_sum}` 的 FNV-1a，目录名 `{encode(name)}-{encode(version)}-{hash8}`。
+  - **不含 mtime**：各项目 `target/doc` 副本 mtime 不同，含 mtime 会导致永不命中。
+  - **含粒度**：成员 `file` 在 `member` / `item` 粒度指向不同文件，粒度不同不可复用。
+  - 版本取自 crate 首页 `<span class="version">`，rustdoc 版本取自 `data-rustdoc-version`（`parse_crate_version` / `parse_rustdoc_meta`）。
+- **md 物化**：命中后把 `<key>/md/<crate>/...` 物化到项目 `out_root/<crate>/...`——同卷**硬链接**（Windows 无需提权），跨卷回退**复制**；不用软链接（Windows 需权限）。
+- **并发**：`atomic_write` 的临时文件名带 `pid` + 单调序号（进程唯一）；`meta.json` 最后写作提交标记，避免读到半成品。
+- **复用条目的 `src_mtime`**：按**本项目** html 的 mtime 回填（`crate_scan` 顺带收集），否则本项目后续 `--incremental` 会永远判定为变化。
+
 ## 7. 缓存策略
 
 - **一级（启动即建，毫秒级）**：已落盘 `index.json` → 直接 `serde_json` 加载。首次构建时只读 `crates.js` + 各 `sidebar-items.js`，再对每个 html **只读文件头抓 `<meta name=description>` 与 `data-rustdoc-version`**（不建 DOM）得到一行摘要。
@@ -305,6 +329,8 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 - CPU 密集的解析/渲染在 async handler 中用 `tokio::task::spawn_blocking` 包裹。
 
 **启动与就绪（不阻塞 `initialize`）**：server 构造时只同步加载已有 `index.json`（毫秒~亚秒级）即开始服务；索引的过期判定与重建交给后台任务，避免冷启动（首次全量构建可能需 1~2 分钟）拖住 `initialize`。工具与资源在访问索引前等待「就绪」信号（`ensure_ready`）：有旧索引则先服务、后台再刷新；完全没有索引时用空占位并等待构建完成。
+
+**多项目就绪（M11）**：每个项目有自己的 `ready` 与 `DocCache`。缺省项目在启动时 eager 构建；其余项目**懒启动**——首次被工具/资源访问时才启动后台构建。所有项目的构建共用一把 `build_lock` 串行执行，避免并发跑 rayon 抢占资源、叠加内存峰值。
 
 ## 8. MCP 接口（rmcp 3.5.0）
 
@@ -324,9 +350,13 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 > `total` 为分页前的命中数；`id` 允许省略类型标记（如 `tokio::task::spawn`）。
 > 冷启动时 `initialize` 立即返回，工具/资源会等待后台索引就绪后再返回（见 §7）。
 
+**多项目（M11）**：全部工具新增可选入参 `project`（省略时用缺省项目）；`list_crates` / `index_status` 的空参改为可选 `project`，并在输出回显 `project`。新增 `list_projects` 工具（**不阻塞**，返回各项目名 / 目录 / 就绪 / 构建中 / 计数 / default 标记），是 Agent 发现项目名的入口。`rebuild_index` 输出增加 `shared_hits`。
+
 ### 资源
 
 `rustdoc://crates`、`rustdoc://{crate}`（crate `index.md`）、`rustdoc://{crate}/{*item}`（条目），用 `ResourceTemplate` 实现 `list_resource_templates` + `read_resource`。
+
+多项目下这些 URI 均支持 `?project=NAME` 查询参数（缺省回落默认项目），例如 `rustdoc://crates?project=cli`、`rustdoc://tokio?project=svc&offset=0&limit=50`。`list_resources` 只发项目级资源（`rustdoc://crates` + 多项目时每个项目的 `rustdoc://crates?project=NAME`），**不逐 crate 列举、不等待就绪**，避免列表膨胀与阻塞。
 
 ### 典型 Agent 流程
 
@@ -346,6 +376,8 @@ mcp-docs tree   [--doc-dir target/doc]                               # 打印条
 mcp-docs show   <id> [--doc-dir target/doc]                          # 打印单条目 markdown
 mcp-docs search <query> [--crate X] [--limit N] [--offset N]         # 检索（可分页）
 ```
+
+全局参数新增 `--store DIR`（env `MCP_DOCS_STORE`），指向跨项目共享索引库；缺省用平台缓存目录。`export` 的输出会打印「共享库命中 / 写入」计数。
 
 ## 10. 测试策略
 
@@ -377,26 +409,30 @@ fixture：把 `temp/doc_probe/target/doc` 裁剪（剔除 `static.files/`、`sea
 | 重名 / 跨 kind 冲突 | 文件覆盖 | kind 前缀 + 成员 kind 后缀兜底；写盘前检测冲突并记 warning |
 | `rmcp` API 漂移 | 编译失败 | 锁精确版本 `rmcp = "=3.5.0"`；rmcp 类型仅存在于 server crate |
 | fixture 被 gitignore 吃掉 | 测试不可复现 | 拷到 `crates/mcp-docs-core/tests/fixtures/doc_probe/`（不在 `/temp/` 下） |
+| 共享库跨卷硬链接不可用 | md 物化失败 | `fs::hard_link` 失败回退 `fs::copy`；不用软链接（Windows 需权限） |
+| 共享库无限增长 | 磁盘膨胀 | 每个 `(crate,version,rustdoc,粒度,指纹)` 一份；`meta.generated_at` 备 GC（本期不做自动清理） |
+| 多进程并发写共享库条目 | 文件撕裂 | md 用 `atomic_write_fast`；临时名进程唯一；`meta.json` 最后写作提交标记 |
+| stat 指纹弱（无内容哈希） | 极端下误复用 | 身份键含 crate 版本；如需更强可并入 `sidebar-items.js` 哈希 |
+| N 项目并行全量构建 | rayon 抢占、内存峰值 | 全部构建共用一把 `build_lock` 串行化 |
 
 ## 12. 依赖版本
 
 ```toml
 [workspace.dependencies]
-scraper    = "0.24"
-htmd       = "0.1"
+scraper    = "0.27"
+htmd       = "0.5"
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 walkdir    = "2"
+rayon      = "1"
 thiserror  = "2"
 anyhow     = "1"
-tracing    = "0.1"
-clap       = { version = "4", features = ["derive"] }
-rmcp       = { version = "=3.5.0", features = ["server", "transport-io", "schemars"] }
-tokio      = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
+clap       = { version = "4", features = ["derive", "env"] }
+rmcp       = { version = "3.5", features = ["server", "transport-io", "schemars"] }
+tokio      = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "sync"] }
 # dev
-insta      = "1"
-assert_cmd = "2"
 tempfile   = "3"
+criterion  = "0.5"
 ```
 
-（`scraper` / `htmd` 的确切可用版本在实施首步用 `cargo add` 校准。）
+（`tokio` 的 `sync` feature 供 `watch` / `Mutex` 使用。）

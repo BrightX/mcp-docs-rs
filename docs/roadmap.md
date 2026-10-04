@@ -15,6 +15,7 @@
 | M8 | 冷启动不阻塞 | ✅ 已完成 |
 | M9 | 性能优化（并行构建 / 检索 / 缓存 / 资源分页） | ✅ 已完成 |
 | M10 | MCP 工具扩展（工具 + 协议能力） | ✅ 已完成 |
+| M11 | 单进程多项目 + 跨项目共享索引库 | ✅ 已完成 |
 
 状态标记：⬜ 未开始 / 🟡 进行中 / ✅ 已完成 / ⛔ 阻塞。
 
@@ -251,6 +252,25 @@
   同时写 `content`（文本）与 `structured_content`。
 - 通知：`Peer` 提供 `notify_resource_list_changed` 等；`Peer<RoleServer>` 可经 `FromContextPart`
   作为工具参数注入。
+
+## M11 — 单进程多项目 + 跨项目共享索引库
+
+**背景**：多个项目（多个仓库）常依赖同一批 crate（如都依赖 tokio 1.51），此前每个项目各起一个 server、各建一份索引，依赖部分被反复解析渲染。本阶段让一个 server 进程服务多个项目，并让依赖 crate 的索引跨项目复用。
+
+**交付物**
+- **共享库（`core/src/shared.rs`）**：按「crate 名 + 版本 + rustdoc 版本 + 粒度 + stat 指纹(file_count,size_sum)」计算身份键（**不含 mtime**，否则跨项目副本无法命中）；命中则复用条目摘要 + md，未命中则解析渲染后落库。md 以**硬链接**（同卷）/ **复制**（跨卷）物化到项目目录。
+- 身份键来源：crate 首页 `<span class="version">` + `data-rustdoc-version`（新增 `parse_crate_version`）。
+- `core::build`：`BuildOptions` 增 `store`；`BuildReport` 增 `shared_hits` / `shared_written`；命中 crate 跳过发现与解析；复用条目按本项目 mtime 回填 `src_mtime`。
+- **单进程多项目**：server 抽出 `Project`（每项目独立索引 / 缓存 / 就绪信号 / 懒启动）；`DocsServer` 改为项目注册表 + `resolve` + 共享构建锁；新增 `list_projects`；17 个工具新增可选 `project` 参数。
+- **启动参数**：`--project NAME=DOC_DIR`（可重复）/ `--projects-file`（JSON）/ `--store` / `--default-project`；旧 `--doc-dir` / `--out-dir` 映射为 `default` 项目。CLI 新增全局 `--store`。
+- **资源 URI（不破坏）**：`rustdoc://crates`、`rustdoc://{crate}`、`rustdoc://{crate}/{item}` 保留，新增 `?project=NAME` 消歧；`list_resources` 缩减为项目级（不逐 crate 列举、不阻塞）。
+- `atomic_write` 临时名改为进程唯一，避免多进程并发写共享库撕裂。
+
+**验收标准**（均已达成）
+- 同一 fixture 两个副本：第二个项目构建 `parsed==0`、`shared_hits>=1`、`reused>0`，且 md 物化到第二个项目目录。
+- 粒度不同 / 内容变化 → 不命中；复用条目 `src_mtime` 按本项目回填，本项目后续 `--incremental` 仍零解析。
+- 多项目：`resolve` 缺省回落与未知项目报错、`list_projects` 返回全部项目、资源 `?project=` 选择正确、非缺省项目懒启动后可用。
+- `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo fmt --all` 全绿。
 
 ## 工作约定
 

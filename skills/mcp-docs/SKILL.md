@@ -25,6 +25,7 @@ mcp-docs 把本地 `cargo doc` 产出的 rustdoc HTML **按条目切分**为 mar
 - 目标项目已执行 `cargo doc`（默认产物在 `target/doc`，含全部依赖）。
 - MCP 服务 `mcp-docs-server` 已注册，或可用 CLI `cargo run -p mcp-docs-cli --`。
 - 索引默认落在 `target/doc-search/`。若索引缺失或过期，服务会在**后台**构建；工具/资源会等待就绪后再返回，首次冷启动可能稍慢。
+- 服务可同时管理**多个项目**：不确定有哪些项目时先调用 `list_projects`；工具/资源的 `project` 参数省略时用缺省项目。
 
 ## 核心工作流：先检索，再读取
 
@@ -49,6 +50,7 @@ get_examples(id="tokio::task::fn.spawn")        → 代码示例
 - **看 trait 有哪些实现者**：`get_trait_implementors(id)`。见 §5。
 - **批量读取多个条目**：`batch_get_items(ids)`（一次上限 20）。见 §6。
 - **用资源直接读**：`rustdoc://{crate}/{item}`、`rustdoc://crates`、`rustdoc://{crate}`（支持分页）。见 §7。
+- **多项目**：先 `list_projects` 查看项目，再在工具/资源上带 `project` 参数。见 §11。
 
 详细的参数与返回字段见 `references/tools.md`；逐任务示例见 `references/workflows.md`。
 
@@ -56,7 +58,8 @@ get_examples(id="tokio::task::fn.spawn")        → 代码示例
 
 | 工具 | 用途 |
 |---|---|
-| `list_crates` | 列出已索引的 crate 及条目数 |
+| `list_projects` | 列出本服务当前服务的项目及就绪状态（多项目时先调用） |
+| `list_crates` | 列出某个项目已索引的 crate 及条目数 |
 | `list_items` | 列出条目摘要（按 crate / 模块 / 类型过滤，支持 `offset`） |
 | `search_items` | 检索条目，返回摘要与得分（结构化输出；支持 `offset`） |
 | `get_item` | 读取条目完整 markdown（可用 `max_bytes` 截断） |
@@ -76,8 +79,8 @@ get_examples(id="tokio::task::fn.spawn")        → 代码示例
 
 ## 资源与 Prompts
 
-- 资源：`rustdoc://crates`、`rustdoc://{crate}`（支持 `?offset=&limit=` 分页）、`rustdoc://{crate}/{item}`（`/` 对应 `::`）。
-- Prompts：`explain_api`（解释 API 用法）、`usage_example`（给出调用示例），入参 `id`；返回引导模型先 `get_item` / `get_examples` 的消息。
+- 资源：`rustdoc://crates`、`rustdoc://{crate}`（支持 `?offset=&limit=` 分页）、`rustdoc://{crate}/{item}`（`/` 对应 `::`）；均可加 `?project=NAME` 指定项目。
+- Prompts：`explain_api`（解释 API 用法）、`usage_example`（给出调用示例），入参 `id` + `project?`；返回引导模型先 `get_item` / `get_examples` 的消息。
 
 ## CLI 兜底（MCP 不可用时）
 
@@ -90,7 +93,7 @@ cargo run -p mcp-docs-cli -- tree
 cargo run -p mcp-docs-cli -- show <id>
 ```
 
-全局参数：`--doc-dir`（默认 `target/doc`）、`--out`（默认 `target/doc-search`）。
+全局参数：`--doc-dir`（默认 `target/doc`）、`--out`（默认 `target/doc-search`）、`--store`（共享索引库，默认平台缓存目录）。
 
 ## 注意事项
 
@@ -100,6 +103,7 @@ cargo run -p mcp-docs-cli -- show <id>
 - **索引过期会自动重建**：`index_status` 可查看 `ready` / `building` / `stale`；schema 或导出粒度变化会触发一次全量重建。
 - **`search_docs` 较慢**：它扫描已导出的 markdown 正文，仅在需要正文命中时使用；结构化字段检索优先用 `search_items` / `find_by_signature`。
 - **通知**：后台构建完成或 `rebuild_index` 成功后，服务会发 `notifications/resources/list_changed`，客户端可据此刷新资源清单。
+- **多项目用 `project`**：工具/资源省略 `project` 时用缺省项目；非缺省项目首次访问才后台构建，首次调用会等待其就绪。各项目共享同一份依赖索引库，同一版本依赖只解析一次。
 
 ## 附带资源
 
