@@ -18,6 +18,10 @@ struct Cli {
     #[arg(long, global = true, default_value = "target/doc-search")]
     out: PathBuf,
 
+    /// 共享库根目录（跨项目复用 crate 文档索引）；缺省用平台缓存目录。
+    #[arg(long, global = true, env = "MCP_DOCS_STORE")]
+    store: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -108,6 +112,9 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> anyhow::Result<()> {
+    // 未显式指定共享库时回落到平台缓存目录；两者都没有则关闭共享。
+    let store = cli.store.clone().or_else(mcp_docs_core::default_store_root);
+
     match &cli.command {
         Command::Tree => print_tree(&cli.doc_dir),
         Command::Show { id } => show(&cli.doc_dir, id),
@@ -121,6 +128,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             *incremental,
             crate_name.as_deref(),
             (*granularity).into(),
+            store.as_deref(),
         ),
         Command::Search {
             query,
@@ -138,6 +146,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             *mode,
             crate_name.as_deref(),
             kind.as_deref(),
+            store.as_deref(),
         ),
     }
 }
@@ -201,6 +210,7 @@ fn export(
     incremental: bool,
     crate_filter: Option<&str>,
     granularity: mcp_docs_core::Granularity,
+    store: Option<&Path>,
 ) -> anyhow::Result<()> {
     let opts = mcp_docs_core::BuildOptions {
         write_markdown: true,
@@ -208,14 +218,17 @@ fn export(
         persist: true,
         crate_filter: crate_filter.map(str::to_string),
         granularity,
+        store: store.map(Path::to_path_buf),
     };
     let report = mcp_docs_core::build(doc_dir, out_dir, &opts)?;
 
     println!(
-        "已导出 {} 个 markdown 文件（重新解析 {}，复用 {}），索引 {} 个条目 → {}",
+        "已导出 {} 个 markdown 文件（重新解析 {}，复用 {}；共享库命中 {}，写入 {}），索引 {} 个条目 → {}",
         report.written,
         report.parsed,
         report.reused,
+        report.shared_hits,
+        report.shared_written,
         report.index.items.len(),
         out_dir.join("index.json").display()
     );
@@ -242,14 +255,19 @@ fn run_search(
     mode: ModeArg,
     crate_name: Option<&str>,
     kind: Option<&str>,
+    store: Option<&Path>,
 ) -> anyhow::Result<()> {
     let index_path = out_dir.join("index.json");
     let index = match mcp_docs_core::load_index(&index_path) {
         Ok(index) => index,
         Err(_) => {
-            let index = mcp_docs_core::build_index(doc_dir, out_dir)?;
-            mcp_docs_core::write_index(&index, &index_path)?;
-            index
+            // 缺索引时构建并落盘（共享库可加速依赖 crate）。
+            let opts = mcp_docs_core::BuildOptions {
+                persist: true,
+                store: store.map(Path::to_path_buf),
+                ..Default::default()
+            };
+            mcp_docs_core::build(doc_dir, out_dir, &opts)?.index
         }
     };
 

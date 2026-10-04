@@ -14,6 +14,7 @@ mod model;
 mod nav;
 mod parse;
 mod search;
+mod shared;
 mod sidebar;
 mod store;
 
@@ -38,10 +39,14 @@ pub use nav::{
     ModuleNode, RelatedItems, TraitImpl,
 };
 pub use parse::{
-    extract_source_lines, parse_item_html, parse_one_line, parse_rustdoc_meta, path_to_identity,
-    ParseOptions,
+    extract_source_lines, parse_crate_version, parse_item_html, parse_one_line, parse_rustdoc_meta,
+    path_to_identity, ParseOptions,
 };
 pub use search::{search, search_page, MatchMode, SearchHit, SearchOutcome, SearchQuery};
+pub use shared::{
+    crate_scan, default_store_root, key_dir_name, materialize_crate, materialize_file, plan,
+    write_entry, CratePlan, CrateStat, StoreMeta,
+};
 pub use sidebar::{parse_sidebar_file, parse_sidebar_str};
 pub use store::{
     atomic_write, atomic_write_fast, encode_fs_name, item_output_path, member_output_path,

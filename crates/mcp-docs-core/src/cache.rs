@@ -240,7 +240,7 @@ impl std::fmt::Debug for DocCache {
 }
 
 /// 是否为需要纳入指纹的产物文件。
-fn is_tracked(path: &Path) -> bool {
+pub(crate) fn is_tracked(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|ext| ext.to_str()),
         Some("html" | "js")
@@ -248,7 +248,7 @@ fn is_tracked(path: &Path) -> bool {
 }
 
 /// 从元数据取修改时间（Unix 毫秒）。
-fn metadata_mtime(metadata: &fs::Metadata) -> u64 {
+pub(crate) fn metadata_mtime(metadata: &fs::Metadata) -> u64 {
     metadata
         .modified()
         .ok()

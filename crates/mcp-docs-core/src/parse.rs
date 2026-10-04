@@ -168,6 +168,19 @@ pub fn parse_one_line(html: &str) -> Option<String> {
     extract_attr(tag, "content")
 }
 
+/// 从 crate 首页抓取 crate 版本号（`<span class="version">0.1.0</span>`）。
+///
+/// 版本号位于 `section#main-content` 的主标题内，**不在页面前部**（大 crate 的
+/// 侧边栏会把头部推后），因此这里扫描整页而非 [`head_slice`]。取不到返回 `None`。
+pub fn parse_crate_version(html: &str) -> Option<String> {
+    const MARKER: &str = r#"class="version">"#;
+    let start = html.find(MARKER)? + MARKER.len();
+    let rest = &html[start..];
+    let end = rest.find("</span>")?;
+    let version = rest[..end].trim();
+    (!version.is_empty()).then(|| version.to_string())
+}
+
 /// 只取页面开头的一段，避免为了抓 meta 而扫描整页。
 fn head_slice(html: &str) -> &str {
     let mut end = html.len().min(4096);

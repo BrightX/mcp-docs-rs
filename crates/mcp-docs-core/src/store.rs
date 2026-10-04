@@ -3,6 +3,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::Result;
 use crate::model::ItemKind;
@@ -91,7 +92,7 @@ fn atomic_write_impl(path: &Path, bytes: &[u8], sync: bool) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("tmp");
+    let tmp = unique_tmp_path(path);
     {
         let mut file = fs::File::create(&tmp)?;
         file.write_all(bytes)?;
@@ -101,6 +102,18 @@ fn atomic_write_impl(path: &Path, bytes: &[u8], sync: bool) -> Result<()> {
     }
     fs::rename(&tmp, path)?;
     Ok(())
+}
+
+/// 生成进程内唯一的临时文件名。
+///
+/// 多进程（多个项目）可能并发写同一共享库文件，固定名 `xxx.tmp` 会互相撕裂；
+/// 这里追加 `pid` + 单调序号，保证各进程/各次写入互不冲突。
+fn unique_tmp_path(path: &Path) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut name = path.as_os_str().to_owned();
+    name.push(format!(".{}-{seq}.tmp", std::process::id()));
+    PathBuf::from(name)
 }
 
 /// 对相对路径的每一段做文件名清洗。

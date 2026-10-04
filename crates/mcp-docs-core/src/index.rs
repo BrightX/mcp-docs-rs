@@ -1,8 +1,8 @@
 //! 构建索引，并可选地渲染 markdown、落盘 index.json 与 meta.json。
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use rayon::prelude::*;
@@ -15,6 +15,7 @@ use crate::model::{
     CrateSummary, DiscoveredItem, Granularity, Index, ItemSummary, INDEX_SCHEMA_VERSION,
 };
 use crate::parse::{self, ParseOptions};
+use crate::shared;
 use crate::store::{atomic_write, atomic_write_fast, item_output_path, member_output_path};
 
 /// 构建选项。
@@ -30,6 +31,9 @@ pub struct BuildOptions {
     pub crate_filter: Option<String>,
     /// 导出粒度：控制成员是否单独落盘。
     pub granularity: Granularity,
+    /// 共享库根目录。`Some` 时启用跨项目复用（解析渲染结果按 crate 身份键入库）；
+    /// `None` 时行为与不使用共享库完全一致。
+    pub store: Option<PathBuf>,
 }
 
 /// 构建结果。
@@ -39,10 +43,14 @@ pub struct BuildReport {
     pub index: Index,
     /// 重新解析的条目数。
     pub parsed: usize,
-    /// 复用旧索引的条目数。
+    /// 复用旧索引或共享库的条目数。
     pub reused: usize,
     /// 写入的 markdown 文件数。
     pub written: usize,
+    /// 命中共享库而整体复用的 crate 数。
+    pub shared_hits: usize,
+    /// 本次写入共享库的 crate 数。
+    pub shared_written: usize,
     /// 解析失败而跳过的条目（`id` 与原因）。
     ///
     /// rustdoc 会为宏重导出生成 `macro.foo!.html` 之类的**重定向页**，
@@ -94,7 +102,11 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
     }
 
     // 1) 串行发现：确定待处理的 crate 与条目，保持稳定顺序（并行后需按序汇总）。
+    //    同时逐 crate 探测共享库：命中则整体复用，不再发现条目。
+    let store_root = opts.store.as_deref();
     let mut crate_names: Vec<String> = Vec::new();
+    let mut plans: Vec<Option<shared::CratePlan>> = Vec::new();
+    let mut reused_crates: Vec<Option<Vec<ItemSummary>>> = Vec::new();
     let mut jobs: Vec<(usize, DiscoveredItem)> = Vec::new();
     for crate_name in discover::list_crates(doc_root)? {
         if let Some(filter) = &opts.crate_filter {
@@ -103,11 +115,38 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
             }
         }
         let crate_index = crate_names.len();
-        for entry in discover::discover_crate(doc_root, &crate_name)? {
-            jobs.push((crate_index, entry));
+
+        let planned = match store_root {
+            Some(store) => Some(shared::plan(
+                store,
+                doc_root,
+                &crate_name,
+                opts.granularity,
+            )?),
+            None => None,
+        };
+        if let Some(plan) = &planned {
+            if !plan.meta.rustdoc_version.is_empty() && rustdoc_version_lock.get().is_none() {
+                let _ = rustdoc_version_lock.set(plan.meta.rustdoc_version.clone());
+            }
+        }
+
+        let reused = planned.as_ref().and_then(|plan| plan.reused.clone());
+        if reused.is_none() {
+            for entry in discover::discover_crate(doc_root, &crate_name)? {
+                jobs.push((crate_index, entry));
+            }
         }
         crate_names.push(crate_name);
+        reused_crates.push(reused);
+        plans.push(planned);
     }
+
+    // store 启用时，未命中 crate 的 md 直接写入共享库对应目录。
+    let store_md_dirs: Vec<Option<PathBuf>> = plans
+        .iter()
+        .map(|plan| plan.as_ref().map(|plan| plan.md_dir.clone()))
+        .collect();
 
     // 2) 并行解析 / 渲染 / 落盘：条目之间彼此独立，是构建的主要瓶颈。
     let results: Vec<ProcessResult> = jobs
@@ -124,18 +163,17 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
                 &previous_by_id,
                 &previous_members,
                 &rustdoc_version_lock,
+                store_md_dirs[*crate_index].as_deref(),
             )
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // 3) 串行汇总：保持条目顺序与计数语义不变。
-    let mut items = Vec::with_capacity(results.iter().map(|r| r.summaries.len()).sum());
+    // 3) 串行汇总：按 crate 顺序拼接「复用条目」与「新建条目」。
+    let mut per_crate: Vec<Vec<ItemSummary>> = vec![Vec::new(); crate_names.len()];
     let (mut parsed, mut reused, mut written) = (0usize, 0usize, 0usize);
     let mut skipped = Vec::new();
-    let mut crate_counts = vec![0usize; crate_names.len()];
     for result in results {
-        crate_counts[result.crate_index] += result.summaries.len();
-        items.extend(result.summaries);
+        per_crate[result.crate_index].extend(result.summaries);
         parsed += result.parsed;
         reused += result.reused;
         written += result.written;
@@ -144,14 +182,42 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
         }
     }
 
-    let crates: Vec<CrateSummary> = crate_names
-        .into_iter()
-        .enumerate()
-        .map(|(index, name)| CrateSummary {
-            name,
-            item_count: crate_counts[index],
-        })
-        .collect();
+    let mut shared_hits = 0usize;
+    let mut shared_written = 0usize;
+    let mut crates: Vec<CrateSummary> = Vec::with_capacity(crate_names.len());
+    let mut items: Vec<ItemSummary> = Vec::new();
+    for (index, name) in crate_names.into_iter().enumerate() {
+        let crate_items = match reused_crates[index].take() {
+            // 命中共享库：直接复用条目，并按需把 md 物化到项目目录。
+            Some(reuse_items) => {
+                if opts.write_markdown {
+                    if let Some(plan) = &plans[index] {
+                        let files: BTreeSet<String> = reuse_items
+                            .iter()
+                            .map(|item| item.file.clone())
+                            .filter(|file| !file.is_empty())
+                            .collect();
+                        shared::materialize_crate(&plan.md_dir, out_root, files)?;
+                    }
+                }
+                reused += reuse_items.len();
+                shared_hits += 1;
+                reuse_items
+            }
+            // 未命中：用构建结果，并写入共享库。
+            None => {
+                let built = std::mem::take(&mut per_crate[index]);
+                if let (Some(store), Some(plan)) = (store_root, plans[index].as_ref()) {
+                    shared::write_entry(store, plan, &built)?;
+                    shared_written += 1;
+                }
+                built
+            }
+        };
+        let item_count = crate_items.len();
+        items.extend(crate_items);
+        crates.push(CrateSummary { name, item_count });
+    }
 
     let rustdoc_version = rustdoc_version_lock.into_inner();
 
@@ -181,6 +247,8 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
         parsed,
         reused,
         written,
+        shared_hits,
+        shared_written,
         skipped,
     })
 }
@@ -215,6 +283,10 @@ impl ProcessResult {
 /// 处理单个条目：增量复用或解析、渲染、落盘，并产出摘要。
 ///
 /// 该函数在并行迭代器内执行，因此只读共享外部状态、不做跨条目协调。
+///
+/// `store_md_dir` 为共享库内本 crate 的 md 目录：`Some` 时渲染结果写入共享库
+/// （且恒渲染，保证库内 md 完整可复用），并按 `write_markdown` 决定是否再物化
+/// 到项目输出目录。
 #[allow(clippy::too_many_arguments)]
 fn process_entry(
     doc_root: &Path,
@@ -227,6 +299,7 @@ fn process_entry(
     previous_by_id: &HashMap<&str, &ItemSummary>,
     previous_members: &HashMap<&str, Vec<&ItemSummary>>,
     rustdoc_version: &OnceLock<String>,
+    store_md_dir: Option<&Path>,
 ) -> Result<ProcessResult> {
     let html_path = doc_root.join(&entry.html_path);
     let mtime = path_mtime(&html_path);
@@ -274,13 +347,21 @@ fn process_entry(
     };
     let parsed = 1;
 
-    // 输出路径只推导一次，父条目与成员摘要共用。
-    let item_path = item_output_path(out_root, &entry.html_path);
+    // 相对输出根的路径（共享库与项目目录逐字符同构，故与具体根无关）。
+    let item_rel = item_output_path(Path::new(""), &entry.html_path);
+    let item_file = rel_to_slash(&item_rel);
+
+    // 渲染目标：store 启用时优先写共享库，且恒渲染以保证库内 md 完整可复用。
+    let should_render = opts.write_markdown || store_md_dir.is_some();
+    let primary = store_md_dir.unwrap_or(out_root);
     let mut written = 0;
-    if opts.write_markdown {
-        let markdown = render_item(&item, render_opts);
-        atomic_write_fast(&item_path, markdown.as_bytes())?;
+    if should_render {
+        let target = primary.join(&item_rel);
+        atomic_write_fast(&target, render_item(&item, render_opts).as_bytes())?;
         written += 1;
+        if opts.write_markdown && store_md_dir.is_some() {
+            shared::materialize_file(&target, &out_root.join(&item_rel))?;
+        }
     }
 
     // 无真实文档时，rustdoc 生成的 `<meta name="description">` 是占位文本
@@ -306,24 +387,28 @@ fn process_entry(
         signature: item.signature.clone(),
         has_docs,
         has_members: !item.members.is_empty(),
-        file: rel_string(out_root, &item_path),
+        file: item_file.clone(),
         html_path: rel_string(doc_root, &entry.html_path),
         parent_id: None,
         src_mtime: mtime,
     });
 
     for member in &item.members {
-        let member_path = member_output_path(out_root, &entry.html_path, member.kind, &member.name);
+        let member_rel =
+            member_output_path(Path::new(""), &entry.html_path, member.kind, &member.name);
         // 成员文件仅在「成员粒度」下写出；条目粒度时只内联在父文件里。
-        if opts.write_markdown && opts.granularity == Granularity::Member {
-            let markdown = render_member_item(member, render_opts);
-            atomic_write_fast(&member_path, markdown.as_bytes())?;
+        if should_render && opts.granularity == Granularity::Member {
+            let target = primary.join(&member_rel);
+            atomic_write_fast(&target, render_member_item(member, render_opts).as_bytes())?;
             written += 1;
+            if opts.write_markdown && store_md_dir.is_some() {
+                shared::materialize_file(&target, &out_root.join(&member_rel))?;
+            }
         }
         // 条目粒度下成员没有独立文件，`file` 指向父条目文件。
         let file = match opts.granularity {
-            Granularity::Member => rel_string(out_root, &member_path),
-            Granularity::Item => rel_string(out_root, &item_path),
+            Granularity::Member => rel_to_slash(&member_rel),
+            Granularity::Item => item_file.clone(),
         };
         summaries.push(ItemSummary {
             id: member.id.clone(),
@@ -349,6 +434,11 @@ fn process_entry(
         skipped: None,
         crate_index,
     })
+}
+
+/// 把路径转成统一以 `/` 分隔的字符串。
+fn rel_to_slash(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 /// 扫描 `doc_root` 构建索引（不写出任何文件）。
