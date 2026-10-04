@@ -56,6 +56,10 @@ pub struct Args {
     #[arg(long, env = "MCP_DOCS_STORE")]
     store: Option<PathBuf>,
 
+    /// 关闭共享库：不读也不写全局缓存，仅用各项目本地的索引与产物。
+    #[arg(long)]
+    no_store: bool,
+
     /// 缺省项目名。
     #[arg(long)]
     default_project: Option<String>,
@@ -201,12 +205,15 @@ pub fn resolve_config(args: &Args) -> anyhow::Result<ServerConfig> {
         .or_else(|| projects.first().map(|project| project.name.clone()))
         .expect("projects 已确保非空");
 
-    // 6) 共享库根：--store > 文件 store > 平台默认。
-    let store = args
-        .store
-        .clone()
-        .or_else(|| file_store.map(PathBuf::from))
-        .or_else(mcp_docs_core::default_store_root);
+    // 6) 共享库根：--no-store 关闭；否则 --store > 文件 store > 平台默认。
+    let store = if args.no_store {
+        None
+    } else {
+        args.store
+            .clone()
+            .or_else(|| file_store.map(PathBuf::from))
+            .or_else(mcp_docs_core::default_store_root)
+    };
 
     Ok(ServerConfig {
         projects,
@@ -228,4 +235,29 @@ fn default_out(doc_dir: &Path) -> PathBuf {
         .parent()
         .map(|parent| parent.join("doc-search"))
         .unwrap_or_else(|| doc_dir.join("doc-search"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// `--no-store` 应关闭共享库（E-5.1）。
+    #[test]
+    fn no_store_disables_shared_store() {
+        let args = Args::parse_from(["mcp-docs-server", "--doc-dir", "target/doc", "--no-store"]);
+        let cfg = resolve_config(&args).unwrap();
+        assert!(cfg.store.is_none(), "指定 --no-store 时不应启用共享库");
+    }
+
+    /// 未指定 `--store` 时默认回落到平台缓存目录（平台无缓存目录时除外）。
+    #[test]
+    fn store_defaults_to_platform_cache() {
+        let args = Args::parse_from(["mcp-docs-server", "--doc-dir", "target/doc"]);
+        let cfg = resolve_config(&args).unwrap();
+        assert_eq!(
+            cfg.store.is_some(),
+            mcp_docs_core::default_store_root().is_some()
+        );
+    }
 }

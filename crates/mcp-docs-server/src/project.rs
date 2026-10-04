@@ -40,6 +40,18 @@ pub(crate) struct ListItemsParams {
     pub(crate) project: Option<String>,
 }
 
+/// `search_items` 的匹配模式。
+#[derive(Debug, Clone, Copy, serde::Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ModeArg {
+    /// 子串匹配（默认）。
+    Substring,
+    /// 前缀匹配。
+    Prefix,
+    /// 模糊子序列匹配。
+    Fuzzy,
+}
+
 /// `search_items` 的参数。
 #[derive(Debug, serde::Deserialize, JsonSchema)]
 pub(crate) struct SearchItemsParams {
@@ -51,7 +63,7 @@ pub(crate) struct SearchItemsParams {
     /// 限定条目类型。
     pub(crate) kind: Option<String>,
     /// 匹配模式：`substring`（默认）/ `prefix` / `fuzzy`。
-    pub(crate) mode: Option<String>,
+    pub(crate) mode: Option<ModeArg>,
     /// 返回上限，默认 20。
     pub(crate) limit: Option<usize>,
     /// 跳过的命中数，默认 0。
@@ -716,9 +728,9 @@ impl Project {
         query.crate_name = params.crate_name;
         query.limit = params.limit.unwrap_or(20);
         query.offset = params.offset.unwrap_or(0);
-        query.mode = match params.mode.as_deref() {
-            Some("prefix") => mcp_docs_core::MatchMode::Prefix,
-            Some("fuzzy") => mcp_docs_core::MatchMode::Fuzzy,
+        query.mode = match params.mode {
+            Some(ModeArg::Prefix) => mcp_docs_core::MatchMode::Prefix,
+            Some(ModeArg::Fuzzy) => mcp_docs_core::MatchMode::Fuzzy,
             _ => mcp_docs_core::MatchMode::Substring,
         };
         if let Some(kind) = params.kind.as_deref().map(parse_kind).transpose()? {

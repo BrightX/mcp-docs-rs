@@ -35,10 +35,10 @@
 | [E-4.1](#e-41) | P3 | JSON Schema 使用非标准 `format`（uint/uint32/uint64） | ⛔ 不修复 |
 | [E-3.4](#e-34) | P1 | `search_docs` 在未导出正文时静默返回空 | ✅ 已修复 |
 | [E-3.5](#e-35) | P2 | 资源条目 URI 的 item 段写法易错 | ✅ 已修复 |
-| [E-3.6](#e-36) | P2 | 工具与资源/prompt 的错误模型不一致 | ⬜ 待修复 |
-| [E-4.2](#e-42) | P3 | `Option<T>` 参数生成 `type:[T,"null"]` 联合类型 | ⬜ 待修复 |
-| [E-4.3](#e-43) | P3 | 枚举候选值未暴露为 schema `enum` | ⬜ 待修复 |
-| [E-5.1](#e-51) | P3 | 默认写入全局共享库且无上限 / GC | ⬜ 待修复 |
+| [E-3.6](#e-36) | P2 | 工具与资源/prompt 的错误模型不一致 | ⛔ 不修复 |
+| [E-4.2](#e-42) | P3 | `Option<T>` 参数生成 `type:[T,"null"]` 联合类型 | ⛔ 不修复 |
+| [E-4.3](#e-43) | P3 | 枚举候选值未暴露为 schema `enum` | ✅ 已修复 |
+| [E-5.1](#e-51) | P3 | 默认写入全局共享库且无上限 / GC | ✅ 已修复 |
 
 ---
 
@@ -182,7 +182,7 @@ tools/call search_docs {"query":"Demo"}  → 命中
 
 **影响**：同一类「未找到」错误在两类入口表现不同，Agent 处理方式不一致。
 
-**建议**：评估统一策略（资源「未找到」改为可读内容，或统一错误文案）。
+**结论**：⛔ 不修复。工具的业务失败用 `isError`、资源 / prompt 的无效请求用 JSON-RPC `error`，是 MCP 协议下的两种既定语义（前者表示"调用已执行但失败"，后者表示"请求无效 / 资源不存在"），并非缺陷。保持现状更贴合协议，只需保证文案可读。
 
 ## 4. 协议与可移植性
 
@@ -204,7 +204,7 @@ tools/call search_docs {"query":"Demo"}  → 命中
 
 **影响**：把工具 schema 映射到单一 `type` 方言的客户端（如 Gemini function declarations / OpenAPI 子集）可能拒绝该工具或丢约束。与 E-4.1（非标准 `format`）同源，但可独立处理。
 
-**建议**：让可选参数生成 `anyOf`，或"非 required 的单一类型"（缺省即 None）。
+**结论**：⛔ 不修复。`type:[T,"null"]` 来自 `schemars` 1.x 对 `Option<T>` 的核心实现（`json_schema_impls/core.rs`），且 rmcp 在内部固定用 `SchemaSettings::draft2020_12()` 生成 schema（`rmcp/src/handler/server/common.rs`），项目侧无法改全局配置；消除它需为每个可选字段手写 JSON Schema，与 E-4.1 同理，收益不抵复杂度。主流客户端接受合法联合 `type`。
 
 ### E-4.3 <a id="e-43"></a>枚举候选值未暴露为 schema `enum`
 
@@ -212,7 +212,9 @@ tools/call search_docs {"query":"Demo"}  → 命中
 
 **根因**：`SearchItemsParams.mode` 为 `Option<String>`（`crates/mcp-docs-server/src/project.rs`）。
 
-**建议**：为 `mode` 生成 schema `enum`；`kind` 取值多且支持前缀（`fn`）/自然名（`function`），暂不收敛为 enum，靠描述提示。
+**修复**：`SearchItemsParams.mode` 由 `Option<String>` 改为枚举 `Option<ModeArg>`（`#[serde(rename_all = "lowercase")]` 派生 `substring|prefix|fuzzy`），schema 暴露 `enum`；未知取值不再静默回退为 `substring`，而是报错（与 `parse_kind` 的"不静默忽略"一致）。`kind` 取值多且支持前缀（`fn`）/自然名（`function`），不收敛为 enum。
+
+**验证**：`tools/list` 的 `search_items.mode` schema 变为 `anyOf[$ref ModeArg, null]`，`$defs.ModeArg` 含 `enum: [substring, prefix, fuzzy]`。
 
 ## 5. 存储与共享库
 
@@ -222,7 +224,9 @@ tools/call search_docs {"query":"Demo"}  → 命中
 
 **根因**：`crates/mcp-docs-server/src/config.rs`（及 CLI）使 `store` 缺省回落到平台缓存目录。
 
-**建议**：文档提示；或增加 `--no-store` / 尺寸上限 / 统计输出。
+**修复**：server 新增 `--no-store` 开关，关闭后不读也不写全局缓存（`crates/mcp-docs-server/src/config.rs`）。默认仍为平台缓存目录（跨项目复用的既定设计）；尺寸上限 / GC 属运维范畴，暂未实现。
+
+**验证**：`--no-store` 启动后 `list_crates` 正常返回，不再触及共享库。
 
 ---
 
