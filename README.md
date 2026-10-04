@@ -55,7 +55,7 @@ cargo run -p mcp-docs-server -- \
   --store ~/.cache/mcp-docs
 ```
 
-在 MCP 客户端中注册该命令即可使用。除缺省项目外，其余项目**首次被访问时**才后台构建。工具：
+在 MCP 客户端中注册该命令即可使用。除缺省项目外，其余项目**首次被访问时**才后台构建。默认会读写共享索引库（平台缓存目录）；不需要时加 `--no-store` 关闭。工具：
 
 | 工具 | 用途 |
 |---|---|
@@ -75,12 +75,12 @@ cargo run -p mcp-docs-server -- \
 | `get_related_items` | 返回条目的父条目、兄弟与子成员 |
 | `get_trait_implementors` | 列出实现了某个 trait 的类型 |
 | `find_by_signature` | 按签名子串（如 `-> Result<`）检索 |
-| `search_docs` | 在已导出的 markdown 正文里全文检索 |
+| `search_docs` | 在已导出的 markdown 正文里全文检索（需先 `mcp-docs export`，否则返回提示） |
 | `rebuild_index` | 重建索引（默认增量） |
 
 多项目时，上述工具都接受可选入参 `project`（省略则用缺省项目）。
 
-资源：`rustdoc://crates`、`rustdoc://{crate}`（支持 `?offset=&limit=` 分页）、`rustdoc://{crate}/{item}`；均可加 `?project=NAME` 指定项目。
+资源：`rustdoc://crates`、`rustdoc://{crate}`（支持 `?offset=&limit=` 分页）、`rustdoc://{crate}/{item}`；均可加 `?project=NAME` 指定项目。item 段用 `/` 表示模块分隔 `::`（如 `rustdoc://tokio/task/spawn`），kind 与名字之间仍用 `.`（如 `rustdoc://tokio/task.Spawn`）。
 
 Prompts：`explain_api` / `usage_example`（入参 `id`，引导模型先读文档再作答）。结构化输出：`search_items` / `get_item_json` / `index_status` / `module_tree` 返回带 `outputSchema` 的结构化内容（同时保留文本）。通知：后台构建完成或 `rebuild_index` 后发送 `notifications/resources/list_changed`。
 

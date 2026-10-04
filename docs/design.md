@@ -377,7 +377,7 @@ mcp-docs show   <id> [--doc-dir target/doc]                          # 打印单
 mcp-docs search <query> [--crate X] [--limit N] [--offset N]         # 检索（可分页）
 ```
 
-全局参数新增 `--store DIR`（env `MCP_DOCS_STORE`），指向跨项目共享索引库；缺省用平台缓存目录。`export` 的输出会打印「共享库命中 / 写入」计数。
+全局参数新增 `--store DIR`（env `MCP_DOCS_STORE`），指向跨项目共享索引库；缺省用平台缓存目录。`export` 的输出会打印「共享库命中 / 写入」计数。server 另提供 `--no-store` 关闭共享库（不读也不写全局缓存）。
 
 ## 10. 测试策略
 

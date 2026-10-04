@@ -83,7 +83,7 @@ batch_get_items(ids=["tokio::task::fn.spawn", "tokio::task::fn.sleep"], max_byte
 ```
 resources/read rustdoc://crates
 resources/read rustdoc://tokio?offset=0&limit=100
-resources/read rustdoc://tokio/task/spawn      # 注意用 / 代替 ::
+resources/read rustdoc://tokio/task/spawn      # item 段用 / 代替 ::(kind 与名字间仍用 .)
 resources/read rustdoc://tokio?project=svc     # 指定项目
 ```
 

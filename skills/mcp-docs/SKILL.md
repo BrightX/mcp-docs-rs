@@ -79,7 +79,7 @@ get_examples(id="tokio::task::fn.spawn")        → 代码示例
 
 ## 资源与 Prompts
 
-- 资源：`rustdoc://crates`、`rustdoc://{crate}`（支持 `?offset=&limit=` 分页）、`rustdoc://{crate}/{item}`（`/` 对应 `::`）；均可加 `?project=NAME` 指定项目。
+- 资源：`rustdoc://crates`、`rustdoc://{crate}`（支持 `?offset=&limit=` 分页）、`rustdoc://{crate}/{item}`（item 段用 `/` 表示模块分隔 `::`，kind 与名字之间仍用 `.`，如 `rustdoc://tokio/task.Spawn`）；均可加 `?project=NAME` 指定项目。
 - Prompts：`explain_api`（解释 API 用法）、`usage_example`（给出调用示例），入参 `id` + `project?`；返回引导模型先 `get_item` / `get_examples` 的消息。
 
 ## CLI 兜底（MCP 不可用时）
@@ -101,9 +101,10 @@ cargo run -p mcp-docs-cli -- show <id>
 - **善用 `max_bytes`**：超大条目（如 trait 页）用 `get_item(id, max_bytes=N)` 按字符边界截断，避免撑爆上下文。
 - **`kind` 过滤要合法**：接受前缀（`fn`）、复数（`functions`）或自然名单数（`function` / `method`）；非法值会报错而非静默忽略。
 - **索引过期会自动重建**：`index_status` 可查看 `ready` / `building` / `stale`；schema 或导出粒度变化会触发一次全量重建。
-- **`search_docs` 较慢**：它扫描已导出的 markdown 正文，仅在需要正文命中时使用；结构化字段检索优先用 `search_items` / `find_by_signature`。
+- **`search_docs` 较慢**：它扫描已导出的 markdown 正文，仅在需要正文命中时使用；若正文尚未导出（仅启动 server），会返回提示而非空结果。结构化字段检索优先用 `search_items` / `find_by_signature`。
 - **通知**：后台构建完成或 `rebuild_index` 成功后，服务会发 `notifications/resources/list_changed`，客户端可据此刷新资源清单。
 - **多项目用 `project`**：工具/资源省略 `project` 时用缺省项目；非缺省项目首次访问才后台构建，首次调用会等待其就绪。各项目共享同一份依赖索引库，同一版本依赖只解析一次。
+- **共享索引库默认开启**：server 默认读写平台缓存目录（跨项目复用依赖索引）；不需要时用 `--no-store` 关闭。
 
 ## 附带资源
 

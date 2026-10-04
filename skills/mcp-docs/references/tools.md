@@ -42,6 +42,7 @@
 - 参数：`query`（必填）、`crate?`、`kind?`、`limit?`（默认 20）、`offset?`（默认 0）。
 - 返回：`{ query, offset, returned, hits: [{ file, id, snippet }] }`。
 - 在**已导出的 markdown 正文**里检索；较慢，正文命中场景才用。
+- 若正文尚未导出（如仅启动 server、未跑 `mcp-docs export`），会返回明确提示而非空结果。
 
 ## 读取
 
@@ -112,7 +113,7 @@
 |---|---|
 | `rustdoc://crates` | 缺省项目的 crate 清单（同 `list_crates`） |
 | `rustdoc://{crate}` | 该 crate 的条目清单，支持 `?offset=N&limit=M`（limit 上限 500） |
-| `rustdoc://{crate}/{item}` | 某条目的 markdown；`/` 对应 `::`，id 可省略类型标记 |
+| `rustdoc://{crate}/{item}` | 某条目的 markdown；item 段用 `/` 表示模块分隔 `::`（如 `tokio/task/spawn`），kind 与名字之间仍用 `.`（如 `tokio/task.Spawn`）；id 可省略类型标记，并对 `struct/Demo` 这类写法做了容错 |
 
 以上 URI 均可追加 `?project=NAME` 指定项目（缺省回落默认项目），
 分页参数与 `project` 可共存，如 `rustdoc://tokio?project=svc&offset=0&limit=50`。
