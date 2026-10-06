@@ -1,52 +1,80 @@
 # mcp-docs-rs
 
-让 AI Agent 快速检索**本地 crate 的最新文档**。
+Let AI agents quickly search the **latest docs of local crates**.
 
-`cargo doc` 生成的 HTML 不适合 Agent 直接阅读：混杂导航与噪声区块（`Auto Trait Implementations`、`Blanket Implementations`），且大 crate 的文档体积巨大，无法整读。本项目把 rustdoc HTML **按条目切分**为 markdown 与扁平索引，并通过 MCP 服务提供「先搜后读」的检索能力。
+The HTML produced by `cargo doc` is a poor fit for agents to read directly: it mixes in navigation and noisy blocks (`Auto Trait Implementations`, `Blanket Implementations`), and docs for large crates are too big to read in full. This project **splits rustdoc HTML into per-item markdown** plus a flat index, and exposes a "search first, then read" retrieval capability through an MCP server.
 
-## 特性
+> English | [简体中文](README.zh-CN.md)
 
-- **按条目切分**：每个 struct / trait / fn / 方法 / 变体 / 字段都是独立条目。
-- **两级产物**：`index.json`（轻量摘要，Agent 首读）+ 按条目落盘的 markdown。
-- **降噪**：剥离 rustdoc 的 UI 噪声、`§` 锚点、blanket / synthetic impl；代码块补 `rust` 语言标注。
-- **可检索**：按名字 / 路径 / 摘要检索并给出相关度得分，支持按 crate 与类型过滤。
-- **增量**：基于产物指纹与文件 mtime，只重建变化的部分。
-- **多项目 + 共享索引库**：一个 server 进程服务多个项目；多个项目依赖同一 crate（如同一版本 tokio）时，只解析渲染一次、跨项目复用。
-- **MCP 服务**：18 个工具 + `rustdoc://` 资源，stdio 传输，按需解析并缓存。
+## Technical Highlights
 
-## 快速开始
+- **Pure Rust toolchain**: Rust 2024, a 3-crate workspace (library core / CLI / MCP server) with unified versions in `[workspace.dependencies]`.
+- **Parses rustdoc HTML directly**: uses `scraper` (html5ever) to parse `cargo doc` output — **no rustdoc JSON** (still unstable), no nightly or `RUSTC_BOOTSTRAP` required; relies only on long-term stable structural invariants, so it is robust across rustdoc versions.
+- **Local-only, offline**: the data source is only the local `target/doc`; never touches docs.rs.
+- **Per-item splitting**: every struct / trait / fn / method / variant / field is its own item; members are both written to disk individually and inlined into the parent item.
+- **Two-tier output**: `index.json` (lightweight summaries, the first thing an agent reads) + per-item markdown bodies on disk.
+- **Denoising**: strips UI noise (`copy-path`, sidebar, anchors) and `blanket` / `synthetic` impl blocks; wraps code blocks in ```rust fences; `htmd` handles HTML→Markdown.
+- **Searchable**: substring / prefix / fuzzy matching over name / path / summary, multi-word AND, filtering by crate and kind, with relevance scoring.
+- **Incremental & cached**: rebuilds only what changed based on an artifact fingerprint and file mtimes; bodies are parsed on demand with an LRU cache.
+- **Multi-project + shared index store**: one process serves many projects; when several projects depend on the same crate (same version), it is parsed and rendered once and reused across projects (materialized via hard links).
+- **MCP integration**: official SDK `rmcp` 3.5 + `tokio`, stdio transport; 18 tools + `rustdoc://` resources + prompts, with structured output and resource-change notifications.
+- **Engineering robustness**: `rayon` parallel builds, `spawn_blocking` for CPU-heavy work, Windows-safe file names (`encode_fs_name`), atomic writes, and a non-blocking cold-start `initialize`.
 
-```bash
-# 1. 在你的项目里生成文档（含依赖）
-cargo doc
+## Features
 
-# 2. 导出 markdown + 索引（默认输出到 target/doc-search）
-cargo run -p mcp-docs-cli -- export
+### 1. Discovery & parsing
 
-# 3. 检索
-cargo run -p mcp-docs-cli -- search "spawn" --crate tokio
-```
+- **Full discovery**: builds the item inventory recursively from `crates.js` and each level's `sidebar-items.js`, covering all crates in the default `cargo doc` output (dependencies included); `all.html` is used as a fallback and cross-check to backfill items missed by both the sidebar and directory scan.
+- **Item kinds**: supports `struct` / `enum` / `union` / `trait` / `trait alias` / `fn` / `type` / `constant` / `static` / `macro` / `primitive` / `derive` / `proc-macro` as well as members (methods / associated items / variants / fields / required trait methods).
+- **Signature & doc extraction**: extracts the `pre.rust.item-decl` signature, top-level docs, each section (`examples` / `panics` / `implementations` / `trait-implementations`, …), and members.
+- **Members as items**: methods and variants become independently searchable items (ids like `crate::Type::method`), so they can be read individually after a precise search while still being inlined into the parent item for full context.
+- **Link rewriting**: resolves rustdoc relative links into item markdown links / source references / external links (e.g. links to std are preserved verbatim); in-page anchors are kept.
 
-### 命令行
+### 2. Markdown rendering & denoising
 
-| 命令 | 说明 |
+- Strips rustdoc UI elements and noisy blocks, removes `§` anchor noise, and keeps `where` clauses.
+- Code blocks are handled by the renderer: it takes the `pre.rust` text directly and wraps it in ```rust fences, avoiding wrong language inference and leftover HTML entities.
+- Three link styles: `Relative` (default), `PlainPath` (most token-efficient), `KeepOriginal` (debugging).
+
+### 3. Index & search
+
+- **Flat `index.json`**: each item's id / kind / path / one-line summary / file location / source location — the first thing an agent reads.
+- **Match modes**: substring, prefix, fuzzy (subsequence); supports **multi-word AND** (summing per-word scores).
+- **Filtering & ranking**: filter by crate and kind; ranking scores exact name > prefix > path hit > summary hit, and summary hits carry a snippet.
+- **Pagination**: `limit` / `offset`, returning the pre-pagination `total`.
+
+### 4. Incremental, caching & performance
+
+- **Fingerprint check**: `file_count` / `max_mtime` / `size_sum` / `crates.js` hash + rustdoc version + schema version — any change triggers a rebuild.
+- **Incremental export**: `--incremental` compares per file by `src_mtime` and rebuilds only what changed.
+- **Two-tier cache**: loads an existing `index.json` in milliseconds at startup; parses bodies only on `get_item`, using `Arc<DocItem>` + LRU (512 by default).
+- **Parallel builds**: `rayon` parallelizes parsing and writing; CPU-heavy tasks run in `spawn_blocking` so the async executor is never blocked.
+
+### 5. Multi-project & cross-project shared index store
+
+- **Multi-project in one process**: a single `mcp-docs-server` process serves many projects; tools / resources take an optional `project` argument (defaulting to the default project). Except for the default project, other projects are lazily built on first access, and all builds share one lock and run serially.
+- **Cross-project shared store**: when several projects depend on the same crate (same version + rustdoc version + granularity), its index summaries and markdown are parsed and rendered once; on a hit they are materialized into the project directory via **hard links** (same volume) / **copy** (cross volume). It lives in the platform cache directory by default, overridable via `--store` / `MCP_DOCS_STORE`, and disabled with `--no-store`.
+
+### 6. Command-line tool `mcp-docs`
+
+| Command | Description |
 |---|---|
-| `mcp-docs tree` | 打印条目树（调试用） |
-| `mcp-docs show <id>` | 解析并打印单个条目 |
-| `mcp-docs export [--incremental] [--crate NAME] [--granularity member\|item]` | 导出 markdown + `index.json` + `meta.json` |
-| `mcp-docs search <query> [--limit] [--offset] [--mode] [--crate] [--kind]` | 检索条目 |
+| `mcp-docs tree` | Print the item tree (debugging) |
+| `mcp-docs show <id>` | Parse and print a single item |
+| `mcp-docs export [--incremental] [--crate NAME] [--granularity member\|item]` | Export markdown + `index.json` + `meta.json` |
+| `mcp-docs search <query> [--limit] [--offset] [--mode] [--crate] [--kind]` | Search items |
 
-全局参数：`--doc-dir`（默认 `target/doc`）、`--out`（默认 `target/doc-search`）、`--store`（共享索引库，默认平台缓存目录，可加速依赖 crate 的导出）。
+Global options: `--doc-dir` (default `target/doc`), `--out` (default `target/doc-search`), `--store` (shared index store, default platform cache directory).
 
-### MCP 服务
+### 7. MCP server
 
-单项目：
+Single project:
 
 ```bash
 cargo run -p mcp-docs-server -- --doc-dir target/doc --out-dir target/doc-search
 ```
 
-多项目（共享一份依赖索引库）：
+Multiple projects (sharing one dependency index store):
 
 ```bash
 cargo run -p mcp-docs-server -- \
@@ -55,60 +83,65 @@ cargo run -p mcp-docs-server -- \
   --store ~/.cache/mcp-docs
 ```
 
-在 MCP 客户端中注册该命令即可使用。除缺省项目外，其余项目**首次被访问时**才后台构建。默认会读写共享索引库（平台缓存目录）；不需要时加 `--no-store` 关闭。工具：
+Register this command in your MCP client to use it. Except for the default project, other projects are built in the background only **on first access**. The design principle is **search first, then read**: search tools return only lightweight summaries + pointers, and only read tools return bodies.
 
-| 工具 | 用途 |
+**Tools (18)**
+
+| Tool | Purpose |
 |---|---|
-| `list_projects` | 列出本服务当前服务的项目及就绪状态 |
-| `list_crates` | 列出某个项目已索引的 crate |
-| `list_items` | 列出条目摘要（按 crate / 模块 / 类型过滤，支持 `offset` 分页） |
-| `search_items` | 检索条目，返回轻量摘要与得分（支持 `offset` 分页） |
-| `get_item` | 读取条目的完整 markdown |
-| `get_item_source` | 查询条目的源码位置 |
-| `get_examples` | 抽取条目文档里的 rust 代码示例 |
-| `get_item_section` | 返回条目某个分节（如 `examples` / `panics`）的 markdown |
-| `batch_get_items` | 批量读取多个条目（ids 上限 20） |
-| `get_source_text` | 按源码位置读取源码文本（失败时回退为路径与行号） |
-| `get_item_json` | 返回条目的结构化 JSON |
-| `index_status` | 返回某个项目的索引状态（就绪 / 构建中 / schema / 版本 / 计数 / 是否过期） |
-| `module_tree` | 返回 crate 的模块树（含每级条目数） |
-| `get_related_items` | 返回条目的父条目、兄弟与子成员 |
-| `get_trait_implementors` | 列出实现了某个 trait 的类型 |
-| `find_by_signature` | 按签名子串（如 `-> Result<`）检索 |
-| `search_docs` | 在已导出的 markdown 正文里全文检索（需先 `mcp-docs export`，否则返回提示） |
-| `rebuild_index` | 重建索引（默认增量） |
+| `list_projects` | List the projects this server serves and their readiness |
+| `list_crates` | List the crates indexed for a project |
+| `list_items` | List item summaries (filter by crate / module / kind, supports `offset` pagination) |
+| `search_items` | Search items, returning lightweight summaries and scores (supports `offset` pagination) |
+| `get_item` | Read an item's full markdown |
+| `get_item_source` | Look up an item's source location |
+| `get_examples` | Extract rust code examples from an item's docs |
+| `get_item_section` | Return the markdown of one section (e.g. `examples` / `panics`) |
+| `batch_get_items` | Read multiple items at once (up to 20 ids) |
+| `get_source_text` | Read source text by location (falls back to path and line numbers on failure) |
+| `get_item_json` | Return an item's structured JSON |
+| `index_status` | Return a project's index status (ready / building / schema / version / counts / stale) |
+| `module_tree` | Return a crate's module tree (with per-level item counts) |
+| `get_related_items` | Return an item's parent, siblings, and child members |
+| `get_trait_implementors` | List the types that implement a trait |
+| `find_by_signature` | Search by signature substring (e.g. `-> Result<`) |
+| `search_docs` | Full-text search in exported markdown bodies (requires `mcp-docs export` first) |
+| `rebuild_index` | Rebuild the index (incremental by default) |
 
-多项目时，上述工具都接受可选入参 `project`（省略则用缺省项目）。
+In multi-project mode, all of the above tools accept an optional `project` argument (defaulting to the default project).
 
-资源：`rustdoc://crates`、`rustdoc://{crate}`（支持 `?offset=&limit=` 分页）、`rustdoc://{crate}/{item}`；均可加 `?project=NAME` 指定项目。item 段用 `/` 表示模块分隔 `::`（如 `rustdoc://tokio/task/spawn`），kind 与名字之间仍用 `.`（如 `rustdoc://tokio/task.Spawn`）。
+**Resources**: `rustdoc://crates`, `rustdoc://{crate}` (supports `?offset=&limit=` pagination), `rustdoc://{crate}/{item}`; all accept `?project=NAME`. In the item segment, `/` denotes the module separator `::` (e.g. `rustdoc://tokio/task/spawn`), while `.` still separates kind and name (e.g. `rustdoc://tokio/task.Spawn`).
 
-Prompts：`explain_api` / `usage_example`（入参 `id`，引导模型先读文档再作答）。结构化输出：`search_items` / `get_item_json` / `index_status` / `module_tree` 返回带 `outputSchema` 的结构化内容（同时保留文本）。通知：后台构建完成或 `rebuild_index` 后发送 `notifications/resources/list_changed`。
+**Prompts**: `explain_api` / `usage_example` (argument `id`, guiding the model to read the docs before answering).
 
-冷启动不阻塞：`initialize` 立即返回；首次的索引构建在后台进行，工具/资源会等待就绪后再返回（已有索引则直接服务、后台按需刷新）。
+**Protocol capabilities**: `search_items` / `get_item_json` / `index_status` / `module_tree` return structured content with an `outputSchema` (while keeping text); after a background build or `rebuild_index`, the server sends `notifications/resources/list_changed`.
 
-典型流程：`search_items("spawn", crate="tokio")` → `get_item("tokio::spawn")` → 只拿到这一小块。
+**Non-blocking cold start**: `initialize` returns immediately; the first index build happens in the background, and tools / resources wait until ready before returning (an existing index is served immediately while a background refresh runs).
 
-## 项目结构
+Typical flow: `search_items("spawn", crate="tokio")` → `get_item("tokio::spawn")` → only that small slice is returned.
 
-| crate | 说明 |
+## Quick start
+
+```bash
+# 1. Generate docs in your project (including dependencies)
+cargo doc
+
+# 2. Export markdown + index (defaults to target/doc-search)
+cargo run -p mcp-docs-cli -- export
+
+# 3. Search
+cargo run -p mcp-docs-cli -- search "spawn" --crate tokio
+```
+
+## Project structure
+
+| Crate | Description |
 |---|---|
-| `crates/mcp-docs-core` | 核心库：发现、解析、渲染、索引、检索、缓存（无 async） |
-| `crates/mcp-docs-cli` | 命令行工具 `mcp-docs` |
-| `crates/mcp-docs-server` | MCP 服务 `mcp-docs-server`（stdio） |
+| `crates/mcp-docs-core` | Core library: discovery, parsing, rendering, indexing, search, cache (no async) |
+| `crates/mcp-docs-cli` | Command-line tool `mcp-docs` |
+| `crates/mcp-docs-server` | MCP server `mcp-docs-server` (stdio) |
 
-## 文档
-
-需求、设计、里程碑与开发规范都在 [`docs/`](docs/)：
-
-- [需求](docs/requirements.md)
-- [设计](docs/design.md)
-- [里程碑与进度](docs/roadmap.md)
-- [开发规范](docs/conventions.md)
-- [错题集](docs/lessons.md)
-- [缺陷跟踪](docs/issues.md)
-- [术语与代码位置对照](docs/glossary.md)
-
-## 开发
+## Development
 
 ```bash
 cargo test --workspace
@@ -116,7 +149,19 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 ```
 
-规范详见 [docs/conventions.md](docs/conventions.md)。
+See [docs/conventions.md](docs/conventions.md) for conventions.
+
+## Documentation
+
+Requirements, design, roadmap, and development conventions live in [`docs/`](docs/) (written in Simplified Chinese):
+
+- [Requirements](docs/requirements.md)
+- [Design](docs/design.md)
+- [Roadmap & progress](docs/roadmap.md)
+- [Conventions](docs/conventions.md)
+- [Lessons learned](docs/lessons.md)
+- [Issue tracking](docs/issues.md)
+- [Glossary & code map](docs/glossary.md)
 
 ## License
 
