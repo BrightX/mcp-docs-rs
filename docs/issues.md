@@ -32,7 +32,7 @@
 | [E-3.1](#e-31) | P2 | `index_status.building` 恒为 `true` | ✅ 已修复 |
 | [E-3.2](#e-32) | P2 | `get_item_json.docs_md` 未重写链接 | ✅ 已修复 |
 | [E-3.3](#e-33) | P2 | `list_crates` 的 `version` 恒为 `null` | ✅ 已修复 |
-| [E-4.1](#e-41) | P3 | JSON Schema 使用非标准 `format`（uint/uint32/uint64） | ⛔ 不修复 |
+| [E-4.1](#e-41) | P3 | JSON Schema 使用非标准 `format`（uint/uint32/uint64） | ✅ 已修复 |
 | [E-3.4](#e-34) | P1 | `search_docs` 在未导出正文时静默返回空 | ✅ 已修复 |
 | [E-3.5](#e-35) | P2 | 资源条目 URI 的 item 段写法易错 | ✅ 已修复 |
 | [E-3.6](#e-36) | P2 | 工具与资源/prompt 的错误模型不一致 | ⛔ 不修复 |
@@ -264,9 +264,11 @@ tools/call search_docs {"query":"Demo"}  → 命中
 
 **根因**：rmcp / schemars 为 `usize` / `u64` / `u32` 生成 `format: "uint*"`（`tools/list` 输出）。
 
-**影响**：严格客户端可能拒绝或忽略这些约束。
+**影响**：严格客户端可能拒绝或忽略这些约束；Agent CLI 等客户端在**每次连接**校验 `tools/list` 时，会对每个 `format: uint*` 打印一行 `unknown format "uint*" ignored`，刷屏噪声明显（实测每次连接打印数十行、且成对重复）。
 
-**结论**：⛔ 不修复。`format: uint*` 是上游 `schemars` 对整数的既定输出（OpenAPI 风格），非本项目逻辑缺陷；消除它需为每个数值字段手写 JSON Schema，收益不抵复杂度。Inspector 报告为 `0 errors, 33 warnings`，主流客户端忽略未知 `format`。若未来接入严格校验客户端再处理。
+**修复**：覆盖 `ServerHandler::list_tools`（`#[tool_handler]` 仅在方法缺失时才生成它，故可覆盖）与 `get_tool`，在返回前递归清洗工具输入 / 输出 schema，删除取值为 `uint` / `uint8` / `uint16` / `uint32` / `uint64` / `uint128` / `int*` 的 `format` 键（`crates/mcp-docs-server/src/server.rs::strip_integer_formats`）。无需逐字段手写 JSON Schema，`u8`/`u16` 的 `uint8`/`uint16` 也一并覆盖。
+
+**验证**：stdio 握手发 `tools/list`，18 个工具的 schema 中 `format` 键数量为 **0**（此前 `crate_count`/`item_count`/`generated_at`/`schema_version`/`SourceOutput.line_*` 等均为 `uint*`）；客户端不再打印告警。单元测试 `strip_integer_formats_recurses` 覆盖递归与「非整数 format 保留」。
 
 ### E-4.2 <a id="e-42"></a>`Option<T>` 参数生成 `type:[T,"null"]` 联合类型
 

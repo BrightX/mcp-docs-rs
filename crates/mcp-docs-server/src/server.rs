@@ -413,6 +413,38 @@ impl ServerHandler for DocsServer {
         )
     }
 
+    /// 覆盖默认 `list_tools`：返回前清洗 schema，移除 schemars 为非负整数生成的
+    /// 非标准 `format`（`uint` / `uint32` / …），否则严格校验的客户端每次连接都会
+    /// 刷 `unknown format "uint*" ignored` 警告（见 `docs/issues.md` E-4.1）。
+    ///
+    /// 注：`#[tool_handler]` 仅在方法缺失时才生成 `list_tools`，故此覆盖生效。
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, McpError> {
+        let supports_cache_hints = context
+            .protocol_version()
+            .is_some_and(|version| version >= rmcp::model::ProtocolVersion::V_2026_07_28);
+        Ok(rmcp::model::ListToolsResult {
+            result_type: Some(rmcp::model::ResultType::COMPLETE),
+            tools: Self::tool_router()
+                .list_all()
+                .into_iter()
+                .map(sanitize_tool)
+                .collect(),
+            meta: None,
+            next_cursor: None,
+            ttl_ms: supports_cache_hints.then_some(0),
+            cache_scope: supports_cache_hints.then_some(rmcp::model::CacheScope::Public),
+        })
+    }
+
+    /// 覆盖默认 `get_tool`，与 `list_tools` 返回同一份清洗后的 schema。
+    fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
+        Self::tool_router().get(name).cloned().map(sanitize_tool)
+    }
+
     async fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -581,6 +613,71 @@ fn build_prompt(name: &str, id: &str, project: Option<&str>) -> Result<Vec<Promp
         other => return Err(format!("未知的 prompt：`{other}`")),
     };
     Ok(vec![PromptMessage::new_text(Role::User, text)])
+}
+
+/// 清洗单个工具的 schema（输入 + 输出）。
+fn sanitize_tool(mut tool: rmcp::model::Tool) -> rmcp::model::Tool {
+    tool.input_schema = Arc::new(strip_integer_formats_owned(&tool.input_schema));
+    if let Some(output) = tool.output_schema.take() {
+        tool.output_schema = Some(Arc::new(strip_integer_formats_owned(&output)));
+    }
+    tool
+}
+
+/// 深拷贝一份 schema 并移除整数 `format`。
+fn strip_integer_formats_owned(schema: &rmcp::model::JsonObject) -> rmcp::model::JsonObject {
+    let mut value = serde_json::Value::Object(schema.clone());
+    strip_integer_formats(&mut value);
+    match value {
+        serde_json::Value::Object(map) => map,
+        _ => unreachable!("schema 顶层一定是对象"),
+    }
+}
+
+/// 递归删除取值为整数格式的 `format` 键。
+///
+/// schemars 为 `u32` / `u64` / `usize` 生成 `format: uint*`（`u8`/`u16` 为 `uint8`/`uint16`），
+/// 这些不在 JSON Schema 标准格式之列（见 `docs/issues.md` E-4.1）。
+fn strip_integer_formats(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if map
+                .get("format")
+                .and_then(|format| format.as_str())
+                .is_some_and(is_integer_format)
+            {
+                map.remove("format");
+            }
+            for child in map.values_mut() {
+                strip_integer_formats(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                strip_integer_formats(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 是否为整数类型的 `format`（schemars 的 `uint*` / `int*`）。
+fn is_integer_format(format: &str) -> bool {
+    matches!(
+        format,
+        "uint"
+            | "uint8"
+            | "uint16"
+            | "uint32"
+            | "uint64"
+            | "uint128"
+            | "int"
+            | "int8"
+            | "int16"
+            | "int32"
+            | "int64"
+            | "int128"
+    )
 }
 
 /// 从查询串里取一个 `usize` 参数，如 `offset=10&limit=5`。
@@ -1071,5 +1168,30 @@ mod tests {
             .unwrap();
         assert!(md.contains("doc_probe"), "概览应含 crate 名：{md}");
         assert!(md.contains("一级条目"), "概览应含一级条目：{md}");
+    }
+
+    /// 整数 `format` 递归移除，其它 `format` 保留（issues E-4.1）。
+    #[test]
+    fn strip_integer_formats_recurses() {
+        let mut value = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "count": { "type": "integer", "format": "uint", "minimum": 0 },
+                "line": { "type": "integer", "format": "uint32" },
+                "when": { "type": "string", "format": "date-time" },
+                "defs": { "$defs": { "x": { "type": "integer", "format": "int64" } } },
+                "list": [ { "type": "integer", "format": "uint64" } ]
+            }
+        });
+        strip_integer_formats(&mut value);
+        assert!(value["properties"]["count"].get("format").is_none());
+        assert!(value["properties"]["line"].get("format").is_none());
+        assert_eq!(value["properties"]["when"]["format"], "date-time");
+        assert!(
+            value["properties"]["defs"]["$defs"]["x"]
+                .get("format")
+                .is_none()
+        );
+        assert!(value["properties"]["list"][0].get("format").is_none());
     }
 }

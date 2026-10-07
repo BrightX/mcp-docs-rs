@@ -268,6 +268,12 @@
 **对**：索引只收录 `sidebar-items.js` 的条目，crate 首页（`{crate}/index.html` 的 top-doc）不在此列，故 `get_item(crate 名)` 恒报「未找到条目」。要 crate 总览须用 `list_items(kind=module)` / `module_tree`，或走 E-3.8 的 `get_item` 回退合成概览。
 **相关**：`project.rs::get_item_blocking`；issues E-3.8
 
+### #4.7 schemars 的整数 `format` 可在 `list_tools` 里统一清洗
+
+**错**：以为 `format: uint*`（`uint`/`uint32`/`uint64`）无解、只能逐字段手写 JSON Schema（E-4.1 因此一度判为不修复）。
+**对**：`schemars` 为 `u32`/`u64`/`usize` **硬编码**生成这些 format（`json_schema_impls/primitives.rs`，无全局开关）。但 rmcp 的 `#[tool_handler]` **仅在方法缺失时**才生成 `list_tools` / `get_tool`（`has_method` 守卫），因此可自行实现这两个方法，在返回前递归删除整数 `format`（改动集中在 `server.rs`，未来新增字段自动覆盖）。注意 `format` 也出现在结构化输出的 `$defs` 内，必须**递归**清理。
+**相关**：`crates/mcp-docs-server/src/server.rs::list_tools` / `strip_integer_formats`；issues E-4.1
+
 ## 5. 工程、依赖与工具链
 
 ### #5.1 scraper 0.27 的 `ElementRef` API 与旧版不同
