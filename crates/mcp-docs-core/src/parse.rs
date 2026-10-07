@@ -291,6 +291,9 @@ fn fill_section_bodies(sections: &mut [Section], docs_md: Option<&str>) {
 }
 
 /// 抽取 markdown 中标题为 `## {title}` 的分节正文（不含标题行）。
+///
+/// 标题文本取自 HTML（内联代码已去反引号），而 markdown 标题会保留 `code` 的反引号，
+/// 故逐行比对前先去掉反引号（见 issues E-1.3）。
 fn extract_md_section(md: &str, title: &str) -> String {
     if title.is_empty() {
         return String::new();
@@ -299,7 +302,7 @@ fn extract_md_section(md: &str, title: &str) -> String {
     let mut offset = 0;
     let Some(body_start) = md.split_inclusive('\n').find_map(|line| {
         offset += line.len();
-        (line.trim_end() == heading).then_some(offset)
+        (line.trim_end().replace('`', "") == heading).then_some(offset)
     }) else {
         return String::new();
     };
@@ -648,9 +651,84 @@ fn heading_text(heading: &ElementRef) -> String {
         .to_string()
 }
 
+/// 从 trait 页面 HTML 抽取实现者签名，返回 `(implementors, foreign)`。
+///
+/// - `implementors`：`#implementors-list` 下本 crate 写的实现（如 `impl AsyncRead for DuplexStream`）；
+/// - `foreign`：`#foreign-impls` 下对**外来类型**的实现（如 `impl AsyncRead for &[u8]`）。
+///
+/// 跨 crate 的实现**不在页面里**，而在 `trait.impl/*.js`（见 `nav::parse_trait_impls`）。
+/// 签名已去 HTML 标签、解码实体（`&lt;` → `<`）。见 issues E-2.3。
+pub fn parse_page_impls(html: &str) -> (Vec<String>, Vec<String>) {
+    let document = Html::parse_document(html);
+    let implementors = impl_signatures(
+        &document,
+        selector!("#implementors-list section.impl > h3.code-header"),
+    );
+    let foreign = impl_signatures(
+        &document,
+        selector!("h2#foreign-impls ~ details section.impl > h3.code-header"),
+    );
+    (implementors, foreign)
+}
+
+/// 用选择器收集代码头文本（去标签、`§` 与多余空白），跳过空串。
+fn impl_signatures(document: &Html, sel: &Selector) -> Vec<String> {
+    document
+        .select(sel)
+        .map(|heading| {
+            heading
+                .text()
+                .collect::<String>()
+                .replace('§', "")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .replace(">where", "> where")
+        })
+        .filter(|signature| !signature.is_empty())
+        .collect()
+}
+
 /// 元素是否含指定 class。
 fn has_class(el: &ElementRef, class: &str) -> bool {
     el.value()
         .attr("class")
         .is_some_and(|classes| classes.split_whitespace().any(|c| c == class))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// trait 页面解析出本 crate 与外来类型实现，且实体已解码（issues E-2.3）。
+    #[test]
+    fn parse_page_impls_extracts_and_decodes() {
+        let html = r##"<html><body><section id="main-content">
+<h2 id="foreign-impls" class="section-header">Implementations on Foreign Types</h2>
+<details class="toggle implementors-toggle"><summary><section id="impl-A-for-%26%5Bu8%5D" class="impl"><h3 class="code-header">impl <a class="trait">AsyncRead</a> for &amp;[<a class="primitive">u8</a>]</h3></section></summary></details>
+<h2 id="implementors" class="section-header">Implementors</h2>
+<div id="implementors-list"><section id="impl-A-for-DuplexStream" class="impl"><h3 class="code-header">impl AsyncRead for DuplexStream</h3></section>
+<section id="impl-A-for-BufReader" class="impl"><h3 class="code-header">impl&lt;R&gt; AsyncRead for BufReader&lt;R&gt;</h3></section></div>
+</section></body></html>"##;
+        let (implementors, foreign) = parse_page_impls(html);
+        assert_eq!(
+            implementors,
+            vec![
+                "impl AsyncRead for DuplexStream",
+                "impl<R> AsyncRead for BufReader<R>",
+            ]
+        );
+        assert_eq!(foreign, vec!["impl AsyncRead for &[u8]"]);
+    }
+
+    /// 分节正文切分对含行内代码反引号的标题也能命中（issues E-1.3）。
+    #[test]
+    fn extract_md_section_tolerates_inline_code_in_title() {
+        let md = "## Errors\n\n出错了。\n\n## When to use `SyncIoBridge`\n\n看这里。\n\n## Examples\n\n```rust\nx\n```\n";
+        assert_eq!(
+            extract_md_section(md, "When to use SyncIoBridge"),
+            "看这里。"
+        );
+        assert_eq!(extract_md_section(md, "Errors"), "出错了。");
+    }
 }

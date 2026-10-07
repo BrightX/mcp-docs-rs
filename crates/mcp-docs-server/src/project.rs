@@ -18,7 +18,8 @@ use mcp_docs_core::{
     BuildOptions, DocCache, DocItem, Granularity, INDEX_SCHEMA_VERSION, IdIndex, Index, ItemKind,
     ItemSummary, ParseOptions, RenderOptions, SearchQuery, build, extract_code_blocks,
     extract_source_lines, find_trait_impl_paths, is_stale, load_index, module_tree,
-    parse_trait_impls, related_items, render_item, render_member_item, rewrite_links, search_page,
+    parse_page_impls, parse_trait_impls, related_items, render_item, render_member_item,
+    rewrite_links, search_page,
 };
 
 /// `list_items` 的参数。
@@ -673,7 +674,12 @@ impl Project {
         };
         let id = resolved.ok_or_else(|| {
             McpError::invalid_params(
-                format!("未找到条目 `{crate_name}::{}`", item.replace('/', "::")),
+                format!(
+                    "未找到条目 `{crate_name}::{}`；可用写法：`rustdoc://{crate_name}/{{mod}}/{{Name}}`\
+                     （如 `rustdoc://tokio/io/copy`）、带类型标记的 `rustdoc://{crate_name}/{{mod}}/{{kind}}.{{Name}}`\
+                     （如 `rustdoc://tokio/io/fn.copy`），或先 `search_items` 拿到 id 再用 `get_item`。",
+                    item.replace('/', "::"),
+                ),
                 None,
             )
         })?;
@@ -927,11 +933,21 @@ impl Project {
                 })
             })
             .collect();
+
+        // 结构分节 `implementors` / `foreign-impls` 的正文是 impl 列表，不在 markdown 里，
+        // `body_md` 天然为空（见 issues E-2.4）：改从 trait 页面抽出实现者签名填充。
+        let mut body_md = rewrite_links(&section.body_md, options.link_style);
+        if body_md.trim().is_empty()
+            && matches!(section.id.as_str(), "implementors" | "foreign-impls")
+        {
+            body_md = trait_section_body(&self.doc_dir, &item.html_path, &section.id);
+        }
+
         Ok(to_json(&serde_json::json!({
             "id": params.id,
             "section": section.id,
             "title": section.title,
-            "body_md": rewrite_links(&section.body_md, options.link_style),
+            "body_md": body_md,
             "returned": members.len(),
             "members": members,
         })))
@@ -1111,6 +1127,10 @@ impl Project {
     }
 
     /// `get_trait_implementors` 的同步实现。
+    ///
+    /// 实现者分两处：**本 crate 与外来类型**的实现写在 trait 页面 HTML 里
+    /// （`#implementors-list` / `#foreign-impls`），**跨 crate** 的在
+    /// `trait.impl/**/trait.<Name>.js`。只读后者会漏掉本 crate 的实现（见 issues E-2.3）。
     pub(crate) fn get_trait_implementors_blocking(
         &self,
         params: ItemParams,
@@ -1125,38 +1145,59 @@ impl Project {
                 summary.id.0, summary.kind
             ));
         }
+        let trait_crate = summary
+            .id
+            .0
+            .split("::")
+            .next()
+            .unwrap_or_default()
+            .to_string();
 
-        let paths = find_trait_impl_paths(&self.doc_dir, Path::new(&summary.html_path));
-        if paths.is_empty() {
-            return Ok(to_json(&serde_json::json!({
-                "id": summary.id.0,
-                "count": 0,
-                "implementors": [],
-                "note": "未找到实现清单文件（trait.impl/**/trait.<Name>.js）",
-            })));
-        }
+        let mut implementors: Vec<serde_json::Value> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut push = |crate_name: &str, text: String, source: &str| {
+            if seen.insert(text.clone()) {
+                implementors.push(serde_json::json!({
+                    "crate": crate_name,
+                    "impl": text,
+                    "source": source,
+                }));
+            }
+        };
 
-        let mut impls = Vec::new();
-        for path in &paths {
-            let js = fs::read_to_string(path)
-                .map_err(|err| format!("读取实现清单 `{}` 失败：{err}", path.display()))?;
-            for imp in parse_trait_impls(&js) {
-                if !impls.contains(&imp) {
-                    impls.push(imp);
-                }
+        // 1) trait 页面：本 crate 的 `impl` 与对外来类型的 `impl`。
+        if let Ok(html) = fs::read_to_string(self.doc_dir.join(&summary.html_path)) {
+            let (in_crate, foreign) = parse_page_impls(&html);
+            for text in in_crate {
+                push(&trait_crate, text, "implementors");
+            }
+            for text in foreign {
+                push(&trait_crate, text, "foreign-impls");
             }
         }
 
-        let implementors: Vec<serde_json::Value> = impls
-            .iter()
-            .map(|imp| serde_json::json!({ "crate": imp.crate_name, "impl": imp.text }))
-            .collect();
+        // 2) trait.impl js：跨 crate 的实现（按 crate 分组）。
+        let mut missing_manifest = true;
+        for path in find_trait_impl_paths(&self.doc_dir, Path::new(&summary.html_path)) {
+            missing_manifest = false;
+            let js = fs::read_to_string(&path)
+                .map_err(|err| format!("读取实现清单 `{}` 失败：{err}", path.display()))?;
+            for imp in parse_trait_impls(&js) {
+                push(&imp.crate_name, imp.text, "cross-crate");
+            }
+        }
+
+        let note = if implementors.is_empty() && missing_manifest {
+            "未找到实现清单文件（trait.impl/**/trait.<Name>.js），也未从 trait 页面解析到实现者"
+        } else {
+            ""
+        };
 
         Ok(to_json(&serde_json::json!({
             "id": summary.id.0,
             "count": implementors.len(),
             "implementors": implementors,
-            "note": "",
+            "note": note,
         })))
     }
 
@@ -1168,11 +1209,18 @@ impl Project {
         let index = self.index();
         let needle = params.pattern.trim().to_lowercase();
         if needle.is_empty() {
-            return Ok(to_json(&serde_json::json!({ "total": 0, "hits": [] })));
+            return Ok(to_json(&serde_json::json!({
+                "pattern": params.pattern,
+                "total": 0,
+                "returned": 0,
+                "hits": [],
+            })));
         }
         let kind = params.kind.as_deref().map(parse_kind).transpose()?;
         let limit = params.limit.unwrap_or(20);
 
+        // 全量扫描以给出准确的 `total`，但只物化前 `limit` 条（见 issues E-3.13）。
+        let mut total = 0usize;
         let mut hits = Vec::new();
         for item in index
             .items
@@ -1184,14 +1232,15 @@ impl Project {
                 continue;
             };
             if contains_ignore_ascii_case(signature, &needle) {
-                hits.push(summary_json(item));
-                if hits.len() >= limit {
-                    break;
+                total += 1;
+                if hits.len() < limit {
+                    hits.push(summary_json(item));
                 }
             }
         }
         Ok(to_json(&serde_json::json!({
             "pattern": params.pattern,
+            "total": total,
             "returned": hits.len(),
             "hits": hits,
         })))
@@ -1201,16 +1250,25 @@ impl Project {
     pub(crate) fn search_docs_blocking(&self, params: SearchDocsParams) -> Result<String, String> {
         let index = self.index();
         let needle = params.query.trim().to_lowercase();
+        let offset = params.offset.unwrap_or(0);
         if needle.is_empty() {
-            return Ok(to_json(&serde_json::json!({ "returned": 0, "hits": [] })));
+            return Ok(to_json(&serde_json::json!({
+                "query": params.query,
+                "offset": offset,
+                "returned": 0,
+                "has_more": false,
+                "hits": [],
+            })));
         }
         let kind = params.kind.as_deref().map(parse_kind).transpose()?;
         let limit = params.limit.unwrap_or(20);
-        let offset = params.offset.unwrap_or(0);
 
         let mut seen = std::collections::HashSet::new();
         let mut matched = 0usize;
         let mut hits = Vec::new();
+        // 命中数达到 limit 就停：`has_more` 表示"可能还有更多"，供调用方翻页
+        // （下一页 offset 用 `next_offset`）。见 issues E-3.13。
+        let mut truncated = false;
         // 统计"应扫描的正文文件数"与"实际读到"的数量，用于区分"无匹配"与"正文缺失"。
         let mut candidates = 0usize;
         let mut read_ok = 0usize;
@@ -1243,6 +1301,7 @@ impl Project {
                 "snippet": snippet,
             }));
             if hits.len() >= limit {
+                truncated = true;
                 break;
             }
         }
@@ -1257,10 +1316,13 @@ impl Project {
             ));
         }
 
+        let returned = hits.len();
         Ok(to_json(&serde_json::json!({
             "query": params.query,
             "offset": offset,
-            "returned": hits.len(),
+            "returned": returned,
+            "has_more": truncated,
+            "next_offset": offset + returned,
             "hits": hits,
         })))
     }
@@ -1338,6 +1400,27 @@ fn crate_overview(index: &Loaded, name: &str) -> Option<String> {
          `search_items(query=\"…\", crate=\"{name}\")` 检索。\n"
     ));
     Some(md)
+}
+
+/// 从 trait 页面抽取实现者签名，渲染成 `implementors` / `foreign-impls` 分节正文。
+///
+/// 这两类结构分节的正文是 impl 列表、不在条目 markdown 里，`body_md` 天然为空
+/// （见 issues E-2.4）。
+fn trait_section_body(doc_dir: &Path, html_path: &Path, section_id: &str) -> String {
+    let Ok(html) = fs::read_to_string(doc_dir.join(html_path)) else {
+        return String::new();
+    };
+    let (implementors, foreign) = parse_page_impls(&html);
+    let signatures = if section_id == "implementors" {
+        implementors
+    } else {
+        foreign
+    };
+    signatures
+        .into_iter()
+        .map(|signature| format!("```rust\n{signature}\n```"))
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// 条目摘要的 JSON 表示。

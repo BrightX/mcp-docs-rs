@@ -99,6 +99,10 @@ get_examples(id="tokio::task::fn.spawn")        → 代码示例
 - **`module` 过滤可能静默为空**：只认 crate 内真实模块段，**重导出别名**（`pub use X as m`）不是模块；空结果会带 `note` 列出可用一级模块，别把空当"不存在"。
 - **检索是名字/路径/子串匹配、无语义排序**：`search_items("Button")` 可能被 `Role::variant.Button` 之类同名成员刷屏；用 `crate` + `kind` 收窄，优先看 `has_docs:true` 的条目。
 - **`max_bytes` 在行边界截断**：被截断时正文不完整，用更大的 `max_bytes` 或 `get_item_section` 读剩余分节。
+- **资源 URI 用 `/{mod}/{Name}`**（如 `rustdoc://tokio/io/copy`）；带类型标记写作 `/{mod}/{kind}.{Name}`（如 `rustdoc://tokio/io/fn.copy`）。把模块分隔写成 `.`（`io.fn.copy`）会 404。
+- **实现者查询**：`get_trait_implementors` 同时给出本 crate / 外来类型 / 跨 crate 实现（`source` 字段区分）；`get_item_section(id, section="implementors"|"foreign-impls")` 返回对应 impl 列表。
+- **`search_docs` 翻页**：看返回的 `has_more`，下一页 `offset` 用 `next_offset`；步长不等于 `limit` 时两页会重叠。`find_by_signature` 带 `total`。
+- **跨会话不代表行为一致**：结论落地前先看 `index_status` 的 `stale` / `schema_version`，空结果先读 `note`。
 
 ## 资源与 Prompts
 

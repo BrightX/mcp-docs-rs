@@ -408,7 +408,9 @@ impl ServerHandler for DocsServer {
              3) 按需用 get_examples{id} / get_item_section{id, section} / get_item_source{id} 补充。\
              约定：`crate` 只填 crate 名；`module` 填 crate 内真实模块名（不带 crate 前缀），\
              重导出别名不是模块、过滤为空时会返回提示；crate 首页不是条目，get_item 传 crate 名\
-             会回退给概览；`kind` 接受 fn/function/method/struct/trait/module/macro 等，非法值报错。\
+             会回退给概览；`kind` 接受 fn/function/method/struct/trait/module/macro 等，非法值报错；\
+             trait 实现者用 get_trait_implementors（含本 crate / 外来 / 跨 crate）；\
+             资源 URI 用 `rustdoc://{crate}/{mod}/{Name}`（带类型标记写作 `rustdoc://{crate}/{mod}/{kind}.{Name}`）。\
              多项目时用 `project` 参数指定项目。",
         )
     }

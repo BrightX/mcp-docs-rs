@@ -255,7 +255,10 @@ fn extract_array_literal(js: &str) -> Option<&str> {
     None
 }
 
-/// 去掉 HTML 标签并规整空白。
+/// 去掉 HTML 标签、解码实体，并规整空白。
+///
+/// 实体（`&lt;` / `&amp;` / `&#39;` 等）解码为字符，避免 impl 文本里出现
+/// `impl&lt;I&gt;` 这类未解码写法（见 issues E-2.3）。
 fn strip_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut in_tag = false;
@@ -267,5 +270,83 @@ fn strip_tags(html: &str) -> String {
             _ => {}
         }
     }
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
+    decode_entities(&out)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace(">where", "> where")
+}
+
+/// 解码 HTML 文本里的实体（命名实体 + 十进制 / 十六进制数字实体）。
+fn decode_entities(input: &str) -> String {
+    if !input.contains('&') {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp + 1..];
+        // 实体长度有限，避免把孤立的 `&` 一路找到很远的地方。
+        let decoded = after
+            .find(';')
+            .filter(|semi| *semi <= 10)
+            .and_then(|semi| decode_entity(&after[..semi]).map(|ch| (ch, semi + 1)));
+        match decoded {
+            Some((ch, consumed)) => {
+                out.push(ch);
+                rest = &after[consumed..];
+            }
+            None => {
+                out.push('&');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 解码单个实体名（不含 `&` 与 `;`）。
+fn decode_entity(entity: &str) -> Option<char> {
+    match entity {
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "amp" => Some('&'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        "nbsp" => Some(' '),
+        _ => {
+            let num = entity.strip_prefix('#')?;
+            let code = match num.strip_prefix('x').or_else(|| num.strip_prefix('X')) {
+                Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                None => num.parse::<u32>().ok()?,
+            };
+            char::from_u32(code)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 跨 crate impl 文本里的 HTML 实体被解码（issues E-2.3）。
+    #[test]
+    fn parse_trait_impls_decodes_entities() {
+        let js = r#"Object.fromEntries([["serde",[["impl&lt;T&gt; <a class=\"trait\" href=\"x\">Serialize</a> for <a class=\"struct\" href=\"y\">Wrapper</a>&lt;T&gt;<div class=\"where\">where T: Serialize</div>",0]]]])"#;
+        let impls = parse_trait_impls(js);
+        assert_eq!(impls.len(), 1);
+        assert_eq!(impls[0].crate_name, "serde");
+        assert!(
+            impls[0].text.contains("impl<T> Serialize for Wrapper<T>"),
+            "{}",
+            impls[0].text
+        );
+        assert!(
+            impls[0].text.contains("where T: Serialize"),
+            "{}",
+            impls[0].text
+        );
+    }
 }

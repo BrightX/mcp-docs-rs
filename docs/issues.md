@@ -27,8 +27,11 @@
 |---|---|---|---|
 | [E-1.1](#e-11) | P1 | `get_item_section` 拿不到文档分节（examples/panics 等） | ✅ 已修复 |
 | [E-1.2](#e-12) | P2 | `get_examples` 把签名块当示例返回 | ✅ 已修复 |
+| [E-1.3](#e-13) | P2 | 分节标题含行内代码时 `body_md` 切不到（`## {title}` 精确比对） | ✅ 已修复 |
 | [E-2.1](#e-21) | P1 | `get_trait_implementors` 对 re-export 的 trait 失效 | ✅ 已修复 |
 | [E-2.2](#e-22) | P2 | `get_related_items` 对成员条目返回全空 | ✅ 已修复 |
+| [E-2.3](#e-23) | P1 | `get_trait_implementors` 漏掉本 crate / 外来类型实现者，且 impl 文本未解码实体 | ✅ 已修复 |
+| [E-2.4](#e-24) | P2 | `get_item_section` 对 `implementors` / `foreign-impls` 返回空 `body_md` | ✅ 已修复 |
 | [E-3.1](#e-31) | P2 | `index_status.building` 恒为 `true` | ✅ 已修复 |
 | [E-3.2](#e-32) | P2 | `get_item_json.docs_md` 未重写链接 | ✅ 已修复 |
 | [E-3.3](#e-33) | P2 | `list_crates` 的 `version` 恒为 `null` | ✅ 已修复 |
@@ -42,6 +45,8 @@
 | [E-3.10](#e-310) | P2 | `get_item` 的 `max_bytes` 盲截，切断点落在正文 / 示例中间 | ✅ 已修复 |
 | [E-3.11](#e-311) | P3 | 工具集合键名不一致（`items` vs `hits`） | ⛔ 不修复 |
 | [E-3.12](#e-312) | P3 | skill / server instructions 缺参数速查，探测成本高 | ✅ 已修复 |
+| [E-3.13](#e-313) | P3 | `find_by_signature` / `search_docs` 缺 `total` / 翻页信号 | ✅ 已修复 |
+| [E-3.14](#e-314) | P3 | 资源 URI 未命中时无引导（易踩 `io.fn.copy` 404） | ✅ 已修复 |
 | [E-4.2](#e-42) | P3 | `Option<T>` 参数生成 `type:[T,"null"]` 联合类型 | ⛔ 不修复 |
 | [E-4.3](#e-43) | P3 | 枚举候选值未暴露为 schema `enum` | ✅ 已修复 |
 | [E-5.1](#e-51) | P3 | 默认写入全局共享库且无上限 / GC | ✅ 已修复 |
@@ -80,6 +85,18 @@ tools/call get_item_section {"id":"anstream::macro.eprint","section":"examples"}
 
 **验证**：`get_examples{id:"tokio::task::fn.spawn"}` 首个示例为文档中的真实示例，不以 `pub fn` 开头。
 
+### E-1.3 <a id="e-13"></a>分节标题含行内代码时 `body_md` 切不到
+
+**现象**：`tokio::io::fn.copy` 的分节 `when-to-use-async-alternatives-instead-of-synciobridge`（标题 `When to use async alternatives instead of \`SyncIoBridge\``）`body_md` 为空，而同页 `errors` / `examples` 正常。
+
+**根因**：`extract_md_section`（`crates/mcp-docs-core/src/parse.rs`）按 `## {title}` 与 markdown 标题行做**精确**比对；`title` 取自 HTML（内联代码已去反引号），而 markdown 标题保留 `` `SyncIoBridge` `` 的反引号，两者不相等 → 切不到。
+
+**影响**：只看 `sections[].body_md` 会漏掉这类分节的正文。
+
+**修复**：逐行比对前去掉反引号。
+
+**验证**：`get_item_json{id:"tokio::io::fn.copy"}` 的该分节 `body_md` 非空；单元测试 `extract_md_section_tolerates_inline_code_in_title`。
+
 ## 2. 导航与关系
 
 ### E-2.1 <a id="e-21"></a>`get_trait_implementors` 对 re-export 的 trait 失效
@@ -111,6 +128,30 @@ tools/call get_trait_implementors {"id":"serde::ser::trait.Serialize"}    → co
 **修复**：`related_items` 中成员条目的 `siblings` 改为「同父条目下的其它成员」，顶层条目保持「同模块顶层条目」。
 
 **验证**：`get_related_items{id:"tokio::runtime::struct.Runtime::method.spawn"}` 返回 8 个兄弟方法。
+
+### E-2.3 <a id="e-23"></a>`get_trait_implementors` 漏掉本 crate / 外来类型实现者，且 impl 文本未解码实体
+
+**现象**：`get_trait_implementors{id:"tokio::io::trait.AsyncRead"}` 只返回 `count:6`（hyper_util / reqwest / tokio_rustls 等**跨 crate** 实现），tokio 自身的 `DuplexStream` / `File` / `TcpStream` 与外来类型（`&[u8]` / `Box<T>` / `Cursor<T>`）实现全缺；impl 文本形如 `impl&lt;I&gt; …`（未解码）。
+
+**根因**：实现者分两处——**本 crate 与外来类型**的实现内联在 trait 页面 HTML（`#implementors-list` / `#foreign-impls`），**跨 crate** 的才在 `trait.impl/**/trait.<Name>.js`。旧实现只读后者，故本 crate 实现全丢（js 里同 crate 那组本就是空数组 `["tokio",[]]`）；`nav::strip_tags` 也未解码 HTML 实体。
+
+**影响**：这是唯一没有替代路径的关系型查询，会给出**不完整的错误结论**。
+
+**修复**：新增 `parse::parse_page_impls`（解析 `#implementors-list` / `#foreign-impls`），与 js 结果合并去重、各带 `source`（`implementors` / `foreign-impls` / `cross-crate`）；`strip_tags` 增加 HTML 实体解码。
+
+**验证**：同参返回 `count:18`（12 本 crate + 5 外来 + 1 跨 crate），文本为 `impl<R, W> AsyncRead for Join<R, W> where …`。
+
+### E-2.4 <a id="e-24"></a>`get_item_section` 对 `implementors` / `foreign-impls` 返回空 `body_md`
+
+**现象**：`get_item_section{id:"tokio::io::trait.AsyncRead", section:"implementors"}` 返回 `body_md:""`、`members:[]`。
+
+**根因**：这两类**结构分节**的正文是 impl 列表，不在条目 markdown 里，`body_md` 天然为空、也不产生 `DocItem` 成员。
+
+**影响**：分节通道对 trait 页面形同空响应。
+
+**修复**：`get_item_section_blocking` 对这两个分节 id，改从 trait 页面抽取实现者签名（`trait_section_body`），渲染为 `rust` 代码块正文。
+
+**验证**：同参 `body_md` 返回 12 个 `impl` 代码块。
 
 ## 3. MCP 接口
 
@@ -255,6 +296,30 @@ tools/call search_docs {"query":"Demo"}  → 命中
 **修复**：`SKILL.md` 增加紧凑参数速查（关键参数名 + 取值 + 空结果坑）；`DocsServer::get_info` 的 instructions 给出一次到位的推荐链路与常见坑。
 
 **验证**：读 SKILL.md 即可写出正确调用，无需 `mcp_get_tool_description`。
+
+### E-3.13 <a id="e-313"></a>`find_by_signature` / `search_docs` 缺 `total` / 翻页信号
+
+**现象**：`find_by_signature` 返回 `{pattern, returned, hits}`、`search_docs` 返回 `{query, offset, returned, hits}`，均无 `total`；与 `search_items`（`total/offset/returned`）不一致，调用方无法判断是否还有更多。
+
+**根因**：两者手写 JSON，早期实现命中 `limit` 即 `break`，拿不到总数。
+
+**影响**：分页靠猜（`offset` 语义不明时更易重叠）。
+
+**修复**：`find_by_signature` 全量扫描给准确 `total`（只物化前 `limit` 条）；`search_docs` 因全量扫描代价高，改给 `has_more` + `next_offset`（不提供 `total`）。
+
+**验证**：`find_by_signature{pattern:"-> Result<", crate:"tokio"}` 返回 `total:69`；`search_docs` 返回 `has_more` / `next_offset`。
+
+### E-3.14 <a id="e-314"></a>资源 URI 未命中时无引导（易踩 `io.fn.copy` 404）
+
+**现象**：`rustdoc://tokio/io/copy` ✅，但 `rustdoc://tokio/io.fn.copy` → `未找到条目 tokio::io.fn.copy`，错误信息无任何写法提示。
+
+**根因**：URI 的 item 段以 `/` 表示 `::`、以 `.` 表示 kind 与 name 分隔；把模块分隔写成 `.` 会拼出不存在的 id，而 `render_uri_item` 只回显拼接结果。
+
+**影响**：id 与 URI 的形态差异易踩坑。
+
+**修复**：未命中时在错误信息里给出可用写法（`rustdoc://{crate}/{mod}/{Name}` 与带类型标记的 `rustdoc://{crate}/{mod}/{kind}.{Name}`）并指向 `search_items` / `get_item`。
+
+**验证**：错误信息含两种写法示例。
 
 ## 4. 协议与可移植性
 

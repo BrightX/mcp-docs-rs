@@ -40,7 +40,7 @@ pub use nav::{
 };
 pub use parse::{
     ParseOptions, extract_source_lines, parse_crate_version, parse_item_html, parse_one_line,
-    parse_rustdoc_meta, path_to_identity,
+    parse_page_impls, parse_rustdoc_meta, path_to_identity,
 };
 pub use search::{MatchMode, SearchHit, SearchOutcome, SearchQuery, search, search_page};
 pub use shared::{

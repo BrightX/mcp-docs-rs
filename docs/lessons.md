@@ -189,6 +189,18 @@
 **规避**：示例应从**文档正文**（`docs_md` / 成员的 `docs_md`）抽取，不要从整篇渲染结果抽取。
 **相关**：`server.rs::get_examples_blocking`；issues E-1.2
 
+### #1.29 trait 的「本 crate 实现」在页面里，`trait.impl` js 只列跨 crate
+
+**错**：以为 `trait.impl/**/trait.<Name>.js` 列出了 trait 的全部实现者。
+**对**：rustdoc 把**本 crate 与外来类型**的实现内联渲染在 trait 页面（`#implementors-list` / `#foreign-impls`），`trait.impl/*.js` 只放**跨 crate** 实现，且同 crate 那组是**空数组**（如 `["tokio",[]]`）。只读 js 会漏掉本 crate 全部实现（`DuplexStream`/`File`/`TcpStream`…），得出"实现者很少"的错误结论。完整结果须合并两处。
+**相关**：`parse.rs::parse_page_impls`、`nav.rs::parse_trait_impls`；issues E-2.3
+
+### #1.30 文档分节标题的 markdown / HTML 文本不一致（反引号）
+
+**错**：用 HTML 取到的标题文本（内联代码去格式后）去精确匹配 markdown 的 `## 标题`。
+**对**：markdown 标题保留内联代码的反引号（`## When to use \`X\``），而 HTML 标题文本没有；精确比对会切不到正文，`body_md` 静默为空（同页其它无内联代码的分节却正常）。比对前应规整（去反引号）。
+**相关**：`parse.rs::extract_md_section`；issues E-1.3
+
 ## 2. 文件系统与路径
 
 ### #2.1 文件名绝不能用 `::`
