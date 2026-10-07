@@ -5,8 +5,8 @@ mod project;
 mod server;
 
 use clap::Parser;
-use rmcp::transport::stdio;
 use rmcp::ServiceExt;
+use rmcp::transport::stdio;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

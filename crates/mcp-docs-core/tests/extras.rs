@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use mcp_docs_core::{
-    build_index, extract_code_blocks, extract_source_lines, module_tree, parse_trait_impls,
-    related_items, trait_impl_rel_path, Index,
+    Index, build_index, extract_code_blocks, extract_source_lines, module_tree, parse_trait_impls,
+    related_items, trait_impl_rel_path,
 };
 
 /// fixture 根目录，等价于一个 `target/doc`。
@@ -54,17 +54,21 @@ fn related_items_of_member_points_to_parent() {
     );
     // 成员条目的兄弟是同父下的其它成员（E-2.2）。
     assert!(!related.siblings.is_empty(), "成员应有兄弟成员");
-    assert!(related
-        .siblings
-        .iter()
-        .all(|sibling| sibling.parent_id.as_deref() == Some("doc_probe::struct.Demo")));
+    assert!(
+        related
+            .siblings
+            .iter()
+            .all(|sibling| sibling.parent_id.as_deref() == Some("doc_probe::struct.Demo"))
+    );
 
     // 父条目应含子成员。
     let parent = related_items(&index.items, "doc_probe::struct.Demo").unwrap();
-    assert!(parent
-        .children
-        .iter()
-        .any(|child| child.id.0 == "doc_probe::struct.Demo::method.new"));
+    assert!(
+        parent
+            .children
+            .iter()
+            .any(|child| child.id.0 == "doc_probe::struct.Demo::method.new")
+    );
 }
 
 #[test]

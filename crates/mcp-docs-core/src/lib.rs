@@ -20,32 +20,32 @@ mod store;
 
 pub use allpage::parse_all_str;
 pub use cache::{
-    fingerprint_doc_root, is_stale, path_mtime, read_meta, write_meta, DocCache, Fingerprint, Meta,
+    DocCache, Fingerprint, Meta, fingerprint_doc_root, is_stale, path_mtime, read_meta, write_meta,
 };
 pub use discover::{discover_all, discover_crate, list_crates};
 pub use error::{Error, Result};
-pub use index::{build, build_index, load_index, write_index, BuildOptions, BuildReport};
-pub use link::{html_to_md_relpath, resolve_href, Resolved};
+pub use index::{BuildOptions, BuildReport, build, build_index, load_index, write_index};
+pub use link::{Resolved, html_to_md_relpath, resolve_href};
 pub use lookup::IdIndex;
 pub use markdown::{
-    extract_code_blocks, render_item, render_member_item, rewrite_links, LinkStyle, RenderOptions,
+    LinkStyle, RenderOptions, extract_code_blocks, render_item, render_member_item, rewrite_links,
 };
 pub use model::{
-    CrateSummary, DiscoveredItem, DocItem, Granularity, Index, ItemId, ItemKind, ItemSummary,
-    Section, SourceRef, INDEX_SCHEMA_VERSION,
+    CrateSummary, DiscoveredItem, DocItem, Granularity, INDEX_SCHEMA_VERSION, Index, ItemId,
+    ItemKind, ItemSummary, Section, SourceRef,
 };
 pub use nav::{
-    find_trait_impl_paths, module_tree, parse_trait_impls, related_items, trait_impl_rel_path,
-    ModuleNode, RelatedItems, TraitImpl,
+    ModuleNode, RelatedItems, TraitImpl, find_trait_impl_paths, module_tree, parse_trait_impls,
+    related_items, trait_impl_rel_path,
 };
 pub use parse::{
-    extract_source_lines, parse_crate_version, parse_item_html, parse_one_line, parse_rustdoc_meta,
-    path_to_identity, ParseOptions,
+    ParseOptions, extract_source_lines, parse_crate_version, parse_item_html, parse_one_line,
+    parse_rustdoc_meta, path_to_identity,
 };
-pub use search::{search, search_page, MatchMode, SearchHit, SearchOutcome, SearchQuery};
+pub use search::{MatchMode, SearchHit, SearchOutcome, SearchQuery, search, search_page};
 pub use shared::{
-    crate_scan, default_store_root, key_dir_name, materialize_crate, materialize_file, plan,
-    write_entry, CratePlan, CrateStat, StoreMeta,
+    CratePlan, CrateStat, StoreMeta, crate_scan, default_store_root, key_dir_name,
+    materialize_crate, materialize_file, plan, write_entry,
 };
 pub use sidebar::{parse_sidebar_file, parse_sidebar_str};
 pub use store::{

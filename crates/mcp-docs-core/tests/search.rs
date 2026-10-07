@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use mcp_docs_core::{build_index, search, search_page, Index, MatchMode, SearchQuery};
+use mcp_docs_core::{Index, MatchMode, SearchQuery, build_index, search, search_page};
 
 /// fixture 根目录，等价于一个 `target/doc`。
 fn fixture_root() -> PathBuf {
@@ -92,9 +92,10 @@ fn crate_and_kind_filters_apply() {
     query.crate_name = Some("doc_probe".to_string());
     query.kinds = vec![mcp_docs_core::ItemKind::Method];
     let hits = search(&index, &query);
-    assert!(hits
-        .iter()
-        .all(|hit| hit.item.kind == mcp_docs_core::ItemKind::Method));
+    assert!(
+        hits.iter()
+            .all(|hit| hit.item.kind == mcp_docs_core::ItemKind::Method)
+    );
 
     // 过滤到不存在的 crate 时无结果。
     let mut none = SearchQuery::new("n");

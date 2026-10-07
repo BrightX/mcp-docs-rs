@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mcp_docs_core::{
-    build, fingerprint_doc_root, is_stale, BuildOptions, DocCache, Granularity, ParseOptions,
+    BuildOptions, DocCache, Granularity, ParseOptions, build, fingerprint_doc_root, is_stale,
 };
 
 /// fixture 根目录，等价于一个 `target/doc`。

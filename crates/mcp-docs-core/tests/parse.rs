@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use mcp_docs_core::{
-    parse_item_html, parse_one_line, parse_rustdoc_meta, DocItem, ItemKind, ParseOptions,
+    DocItem, ItemKind, ParseOptions, parse_item_html, parse_one_line, parse_rustdoc_meta,
 };
 
 /// fixture 根目录，等价于一个 `target/doc`。

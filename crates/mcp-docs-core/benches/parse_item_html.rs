@@ -3,8 +3,8 @@
 use std::hint::black_box;
 use std::path::PathBuf;
 
-use criterion::{criterion_group, criterion_main, Criterion};
-use mcp_docs_core::{parse_item_html, ParseOptions};
+use criterion::{Criterion, criterion_group, criterion_main};
+use mcp_docs_core::{ParseOptions, parse_item_html};
 
 /// fixture 根目录（等价于一个 `target/doc`）。
 fn fixture_root() -> PathBuf {

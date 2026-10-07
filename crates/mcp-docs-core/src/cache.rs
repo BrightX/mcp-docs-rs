@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::error::Result;
-use crate::model::{DocItem, ItemId, INDEX_SCHEMA_VERSION};
+use crate::model::{DocItem, INDEX_SCHEMA_VERSION, ItemId};
 use crate::parse::{self, ParseOptions};
 use crate::store::atomic_write;
 

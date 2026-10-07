@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use mcp_docs_core::{
-    discover_all, discover_crate, list_crates, parse_all_str, parse_sidebar_str, ItemKind,
+    ItemKind, discover_all, discover_crate, list_crates, parse_all_str, parse_sidebar_str,
 };
 
 /// fixture 根目录，等价于一个 `target/doc`。

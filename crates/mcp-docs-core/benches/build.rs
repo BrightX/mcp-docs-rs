@@ -5,7 +5,7 @@
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use mcp_docs_core::build_index;
 
 /// fixture 根目录（等价于一个 `target/doc`）。

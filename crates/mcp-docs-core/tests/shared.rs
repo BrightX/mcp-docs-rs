@@ -4,8 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mcp_docs_core::{
-    build, crate_scan, key_dir_name, materialize_file, parse_crate_version, plan, write_entry,
-    BuildOptions, CrateStat, Granularity, ItemId, ItemKind, ItemSummary,
+    BuildOptions, CrateStat, Granularity, ItemId, ItemKind, ItemSummary, build, crate_scan,
+    key_dir_name, materialize_file, parse_crate_version, plan, write_entry,
 };
 
 /// fixture 根目录，等价于一个 `target/doc`。
@@ -136,18 +136,22 @@ fn changed_size_invalidates_entry() {
 
     let planned = plan(&store, &doc, "doc_probe", Granularity::Member).unwrap();
     write_entry(&store, &planned, &[]).unwrap();
-    assert!(plan(&store, &doc, "doc_probe", Granularity::Member)
-        .unwrap()
-        .is_hit());
+    assert!(
+        plan(&store, &doc, "doc_probe", Granularity::Member)
+            .unwrap()
+            .is_hit()
+    );
 
     // 改动某个 html 的字节数 → stat 指纹变化 → 不再命中。
     let target = doc.join("doc_probe").join("struct.Demo.html");
     let html = fs::read_to_string(&target).unwrap();
     fs::write(&target, format!("{html}<!--pad-->")).unwrap();
 
-    assert!(!plan(&store, &doc, "doc_probe", Granularity::Member)
-        .unwrap()
-        .is_hit());
+    assert!(
+        !plan(&store, &doc, "doc_probe", Granularity::Member)
+            .unwrap()
+            .is_hit()
+    );
 }
 
 #[test]

@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 
 use mcp_docs_core::{
-    encode_fs_name, item_output_path, member_output_path, parse_item_html, render_item,
-    resolve_href, rewrite_links, DocItem, ItemKind, LinkStyle, ParseOptions, RenderOptions,
-    Resolved,
+    DocItem, ItemKind, LinkStyle, ParseOptions, RenderOptions, Resolved, encode_fs_name,
+    item_output_path, member_output_path, parse_item_html, render_item, resolve_href,
+    rewrite_links,
 };
 
 /// fixture 根目录，等价于一个 `target/doc`。
