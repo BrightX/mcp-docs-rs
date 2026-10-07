@@ -250,6 +250,24 @@
 **规避**：调试前先用默认参数（或服务实际会用的目录）把索引建好；需要非默认目录时改用直接 stdio JSON-RPC 握手。
 **相关**：`crates/mcp-docs-server/src/main.rs`（`--doc-dir` / `--out-dir`）
 
+### #4.4 重导出别名不是模块，`module` 过滤会静默落空
+
+**错**：以为 `list_items(module="component")` 能列出 `pub use gpui_component as component` 重导出的内容。
+**对**：`module` 过滤按 `item.path[1..]` 的**真实文档模块段**匹配（`project.rs::matches_module`）；重导出别名不产生条目、不进入 `path`，故恒空且**不报错**；带 crate 前缀的写法（`crate::mod`）同样因首段不匹配而落空。空结果 ≠ "不存在"。规避：`module` 传 crate 内真实模块名（不带 crate 前缀），文件名/重导出路径用工作区 grep 确认。
+**相关**：`project.rs::matches_module`；issues E-3.7
+
+### #4.5 检索得分不含语境，同名不同 kind 会同分
+
+**错**：以为名字精确命中就一定能排在前面。
+**对**：`rank` 的 100 分对"名字精确相等"的所有条目一视同仁——`accesskit::Role::variant.Button` 与真正的 `button::Button` 同为 100，靠 id 升序时变体反而在前（实测约 102 条噪声）。得分之外还需 `has_docs` / 是否成员 / 路径深度等**语境次级键**才能把真结果顶上来。
+**相关**：`search.rs::rank` / `ranked_hits`；issues E-3.9
+
+### #4.6 crate 首页不是条目
+
+**错**：以为 `get_item("tokio")` 能读到 crate 总览。
+**对**：索引只收录 `sidebar-items.js` 的条目，crate 首页（`{crate}/index.html` 的 top-doc）不在此列，故 `get_item(crate 名)` 恒报「未找到条目」。要 crate 总览须用 `list_items(kind=module)` / `module_tree`，或走 E-3.8 的 `get_item` 回退合成概览。
+**相关**：`project.rs::get_item_blocking`；issues E-3.8
+
 ## 5. 工程、依赖与工具链
 
 ### #5.1 scraper 0.27 的 `ElementRef` API 与旧版不同

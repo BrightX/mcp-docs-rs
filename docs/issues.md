@@ -36,6 +36,12 @@
 | [E-3.4](#e-34) | P1 | `search_docs` 在未导出正文时静默返回空 | ✅ 已修复 |
 | [E-3.5](#e-35) | P2 | 资源条目 URI 的 item 段写法易错 | ✅ 已修复 |
 | [E-3.6](#e-36) | P2 | 工具与资源/prompt 的错误模型不一致 | ⛔ 不修复 |
+| [E-3.7](#e-37) | P2 | `list_items` 的 `module` 过滤在重导出 / 带 crate 前缀时静默返回空 | ✅ 已修复 |
+| [E-3.8](#e-38) | P2 | crate 根不可查（`get_item` 读不到 crate 总览） | ✅ 已修复 |
+| [E-3.9](#e-39) | P2 | 检索排序无语境权重，同名成员 / 变体淹没真结果 | ✅ 已修复 |
+| [E-3.10](#e-310) | P2 | `get_item` 的 `max_bytes` 盲截，切断点落在正文 / 示例中间 | ✅ 已修复 |
+| [E-3.11](#e-311) | P3 | 工具集合键名不一致（`items` vs `hits`） | ⛔ 不修复 |
+| [E-3.12](#e-312) | P3 | skill / server instructions 缺参数速查，探测成本高 | ✅ 已修复 |
 | [E-4.2](#e-42) | P3 | `Option<T>` 参数生成 `type:[T,"null"]` 联合类型 | ⛔ 不修复 |
 | [E-4.3](#e-43) | P3 | 枚举候选值未暴露为 schema `enum` | ✅ 已修复 |
 | [E-5.1](#e-51) | P3 | 默认写入全局共享库且无上限 / GC | ✅ 已修复 |
@@ -183,6 +189,72 @@ tools/call search_docs {"query":"Demo"}  → 命中
 **影响**：同一类「未找到」错误在两类入口表现不同，Agent 处理方式不一致。
 
 **结论**：⛔ 不修复。工具的业务失败用 `isError`、资源 / prompt 的无效请求用 JSON-RPC `error`，是 MCP 协议下的两种既定语义（前者表示"调用已执行但失败"，后者表示"请求无效 / 资源不存在"），并非缺陷。保持现状更贴合协议，只需保证文案可读。
+
+### E-3.7 <a id="e-37"></a>`list_items` 的 `module` 过滤在重导出 / 带 crate 前缀时静默返回空
+
+**现象**：`list_items{crate:"gpui_kit", module:"component"}` 返回 `{"items":[],"total":0}`（`isError:false`）；`module:"gpui_kit::component"` 同样空。而 `module:"io"`（tokio）/ `module:"button"`（gpui_component）正常。实测对话（检索 gpui-kit）中 Agent 连续两次拿到空结果，最终改用工作区 grep 绕过。
+
+**根因**：`matches_module`（`crates/mcp-docs-server/src/project.rs`）按 `item.path[1..]` 的**真实文档模块段**精确匹配；`component` 是 `pub use gpui_component as component` 的**重导出别名**，不产生条目、不进入 `path`，故恒不命中；带 crate 前缀的写法（`gpui_kit::component`）也因首段不匹配而落空。空结果与"确实无此模块"无法区分。
+
+**影响**：Agent 把静默空结果当成否定结论，误判"依赖里没有该模块"。
+
+**修复**：过滤前归一化 `module`（剥离前导 `::`；当首段等于该 crate 名时剥离 crate 前缀）；结果为空且显式指定了 `module` 时，返回 `note` 列出该 crate 可用的一级模块，并提示改用 `search_items` 或正确模块名。
+
+**验证**：`list_items{crate:"gpui_kit", module:"component"}` 返回带 `note` 的空结果（列出 gpui_kit 一级模块）；`list_items{crate:"tokio", module:"tokio::io"}` 正常命中（前缀被剥离）。
+
+### E-3.8 <a id="e-38"></a>crate 根不可查（`get_item` / 资源读不到 crate 总览）
+
+**现象**：`get_item{id:"tokio"}` / `get_item{id:"gpui_kit"}` / `get_item{id:"gpui_component"}` 均 `isError:true 未找到条目`。
+
+**根因**：索引只收录 sidebar-items 的条目，crate 首页（`{crate}/index.html` 的 top-doc）不是条目，`IdIndex::find` 必然落空；资源 `rustdoc://{crate}` 只给条目清单，没有 crate 概览。
+
+**影响**：想拿 crate 总览只能绕道 `list_items(kind=module)` / `module_tree`，且要先 `mcp_get_tool_description` 才知道后者存在。
+
+**修复**：`get_item_blocking` 未命中、且 id 恰好等于某个已索引 crate 名时，回退返回**合成概览**：条目数 + 一级模块清单 + 一级条目清单 + 后续调用指引；同时区分「crate 未索引」与「条目未找到」。
+
+**验证**：`get_item{id:"tokio"}` 返回 tokio 的概览（含 `io` / `task` 等一级模块）；`get_item{id:"tokio::io::trait.AsyncReadExt"}` 行为不变。
+
+### E-3.9 <a id="e-39"></a>检索排序无语境权重，同名成员 / 变体淹没真结果
+
+**现象**：`search_items{query:"Button", crate:"gpui_kit"}` 中真正的组件与无文档的 `accesskit::Role::variant.Button` 同为 `score:100`，约 102 条噪声；`search_items{query:"component", kind:"mod"}` 唯一命中是 one_line 含 "URI component" 的 `http::mod.uri`。
+
+**根因**：`rank`（`crates/mcp-docs-core/src/search.rs`）只按名字 / 路径 / 摘要打分，`ranked_hits` 的排序键为「score → 名字长度 → id」，不区分顶层 vs 成员、有文档 vs 无文档、路径深浅。
+
+**影响**：真结果被名称相同的成员 / 变体挤出前若干条。
+
+**修复**：同分时追加次级键 `has_docs 降序 → 非成员优先 → 路径深度升序 → 名字长度升序 → id 升序`；保持 100/80/60/40/20 分数语义不变（同步更新 `roadmap.md` M9 的排序红线说明）。
+
+**验证**：`search_items{crate:"gpui_kit", query:"Button"}` 中 `button` 模块相关条目排在 `accesskit::Role::variant.Button` 之前；`mcp-docs-core` 检索测试仍全绿。
+
+### E-3.10 <a id="e-310"></a>`get_item` 的 `max_bytes` 盲截，切断点落在正文 / 示例中间
+
+**现象**：`get_item{id:"tokio::io::trait.AsyncReadExt", max_bytes:12000}` 截在 `read_i16` 示例代码中间，后半段内容丢失。
+
+**根因**：`truncate`（`crates/mcp-docs-server/src/project.rs`）按字节前缀硬切，只保证 UTF-8 字符边界，不对齐行 / 分节。
+
+**影响**：截断处割裂正文与示例，调用方看到的"完整"文档实则缺内容。
+
+**修复**：截断点回退到最近的行边界（`\n`，找不到再退回字符边界），并改进提示文案（提示用更大 `max_bytes`、或 `get_item_section` 读剩余分节）。
+
+**验证**：`get_item(..., max_bytes=N)` 的截断处落在整行边界；截断提示含后续读取指引。
+
+### E-3.11 <a id="e-311"></a>工具集合键名不一致（`items` vs `hits`）
+
+**现象**：`list_items` / `batch_get_items` 返回 `items`；`search_items` / `find_by_signature` / `search_docs` 返回 `hits`。
+
+**根因**：两族工具分别手写 JSON / 结构体，未统一键名。
+
+**结论**：⛔ 不修复。list 族 → `items`（列举清单）、search 族 → `hits`（检索命中）各有语义，且在 `skills/mcp-docs/references/tools.md` 已如实记录；统一属破坏性变更，收益不抵复杂度（与 E-3.6 / E-4.1 同理）。
+
+### E-3.12 <a id="e-312"></a>skill / server instructions 缺参数速查，探测成本高
+
+**现象**：实测对话中 Agent 每轮先调 `mcp_get_tool_description` 摸 schema（共 3 次），并在 `kind:"mod"` / `"module"` 之间试探；回答一个「tokio IO 用法」用了 17 次工具调用、8 个 assistant 轮次。
+
+**根因**：`skills/mcp-docs/SKILL.md` 的工具表只写用途不写参数；参数细节在 `references/tools.md` 但不会随技能加载自动注入；`get_info` 的 instructions 仅一句泛化链路。
+
+**修复**：`SKILL.md` 增加紧凑参数速查（关键参数名 + 取值 + 空结果坑）；`DocsServer::get_info` 的 instructions 给出一次到位的推荐链路与常见坑。
+
+**验证**：读 SKILL.md 即可写出正确调用，无需 `mcp_get_tool_description`。
 
 ## 4. 协议与可移植性
 

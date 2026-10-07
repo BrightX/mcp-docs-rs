@@ -7,12 +7,12 @@ use std::sync::OnceLock;
 
 use rayon::prelude::*;
 
-use crate::cache::{fingerprint_doc_root, path_mtime, write_meta, Meta};
+use crate::cache::{Meta, fingerprint_doc_root, path_mtime, write_meta};
 use crate::discover;
 use crate::error::Result;
-use crate::markdown::{render_item, render_member_item, rewrite_links, LinkStyle, RenderOptions};
+use crate::markdown::{LinkStyle, RenderOptions, render_item, render_member_item, rewrite_links};
 use crate::model::{
-    CrateSummary, DiscoveredItem, Granularity, Index, ItemSummary, INDEX_SCHEMA_VERSION,
+    CrateSummary, DiscoveredItem, Granularity, INDEX_SCHEMA_VERSION, Index, ItemSummary,
 };
 use crate::parse::{self, ParseOptions};
 use crate::shared;
@@ -109,10 +109,10 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
     let mut reused_crates: Vec<Option<Vec<ItemSummary>>> = Vec::new();
     let mut jobs: Vec<(usize, DiscoveredItem)> = Vec::new();
     for crate_name in discover::list_crates(doc_root)? {
-        if let Some(filter) = &opts.crate_filter {
-            if &crate_name != filter {
-                continue;
-            }
+        if let Some(filter) = &opts.crate_filter
+            && &crate_name != filter
+        {
+            continue;
         }
         let crate_index = crate_names.len();
 
@@ -125,10 +125,11 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
             )?),
             None => None,
         };
-        if let Some(plan) = &planned {
-            if !plan.meta.rustdoc_version.is_empty() && rustdoc_version_lock.get().is_none() {
-                let _ = rustdoc_version_lock.set(plan.meta.rustdoc_version.clone());
-            }
+        if let Some(plan) = &planned
+            && !plan.meta.rustdoc_version.is_empty()
+            && rustdoc_version_lock.get().is_none()
+        {
+            let _ = rustdoc_version_lock.set(plan.meta.rustdoc_version.clone());
         }
 
         let reused = planned.as_ref().and_then(|plan| plan.reused.clone());
@@ -190,15 +191,15 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
         let crate_items = match reused_crates[index].take() {
             // 命中共享库：直接复用条目，并按需把 md 物化到项目目录。
             Some(reuse_items) => {
-                if opts.write_markdown {
-                    if let Some(plan) = &plans[index] {
-                        let files: BTreeSet<String> = reuse_items
-                            .iter()
-                            .map(|item| item.file.clone())
-                            .filter(|file| !file.is_empty())
-                            .collect();
-                        shared::materialize_crate(&plan.md_dir, out_root, files)?;
-                    }
+                if opts.write_markdown
+                    && let Some(plan) = &plans[index]
+                {
+                    let files: BTreeSet<String> = reuse_items
+                        .iter()
+                        .map(|item| item.file.clone())
+                        .filter(|file| !file.is_empty())
+                        .collect();
+                    shared::materialize_crate(&plan.md_dir, out_root, files)?;
                 }
                 reused += reuse_items.len();
                 shared_hits += 1;
@@ -329,10 +330,10 @@ fn process_entry(
     let Ok(html) = fs::read_to_string(&html_path) else {
         return Ok(ProcessResult::empty(crate_index));
     };
-    if rustdoc_version.get().is_none() {
-        if let Some((version, _)) = parse::parse_rustdoc_meta(&html) {
-            let _ = rustdoc_version.set(version);
-        }
+    if rustdoc_version.get().is_none()
+        && let Some((version, _)) = parse::parse_rustdoc_meta(&html)
+    {
+        let _ = rustdoc_version.set(version);
     }
 
     let item = match parse::parse_item_html(&html, &entry.html_path, parse_opts) {

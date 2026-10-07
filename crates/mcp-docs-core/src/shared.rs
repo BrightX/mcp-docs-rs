@@ -17,7 +17,7 @@ use walkdir::WalkDir;
 
 use crate::cache::{is_tracked, metadata_mtime};
 use crate::error::Result;
-use crate::model::{Granularity, ItemSummary, INDEX_SCHEMA_VERSION};
+use crate::model::{Granularity, INDEX_SCHEMA_VERSION, ItemSummary};
 use crate::store::{atomic_write, encode_fs_name};
 use crate::{fnv1a, parse};
 
@@ -83,10 +83,10 @@ impl CratePlan {
 /// 其余 Unix 用 `$XDG_CACHE_HOME`（缺省 `~/.cache`）下的 `mcp-docs/store`。
 /// 无法确定时返回 `None`（调用方可据此关闭共享）。
 pub fn default_store_root() -> Option<PathBuf> {
-    if let Some(value) = std::env::var_os("MCP_DOCS_STORE") {
-        if !value.is_empty() {
-            return Some(PathBuf::from(value));
-        }
+    if let Some(value) = std::env::var_os("MCP_DOCS_STORE")
+        && !value.is_empty()
+    {
+        return Some(PathBuf::from(value));
     }
 
     #[cfg(target_os = "windows")]
@@ -158,13 +158,13 @@ pub fn crate_scan(doc_root: &Path, crate_name: &str) -> (CrateStat, HashMap<Stri
         stat.file_count += 1;
         stat.size_sum += metadata.len();
 
-        if entry.path().extension().and_then(|ext| ext.to_str()) == Some("html") {
-            if let Ok(rel) = entry.path().strip_prefix(doc_root) {
-                mtimes.insert(
-                    rel.to_string_lossy().replace('\\', "/"),
-                    metadata_mtime(&metadata),
-                );
-            }
+        if entry.path().extension().and_then(|ext| ext.to_str()) == Some("html")
+            && let Ok(rel) = entry.path().strip_prefix(doc_root)
+        {
+            mtimes.insert(
+                rel.to_string_lossy().replace('\\', "/"),
+                metadata_mtime(&metadata),
+            );
         }
     }
 

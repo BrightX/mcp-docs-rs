@@ -44,7 +44,7 @@ get_examples(id="tokio::task::fn.spawn")        → 代码示例
 ## 常见任务
 
 - **查某个 API 的用法**：`search_items` → `get_item`（必要时 `get_examples`）。见 `references/workflows.md` §1。
-- **探索陌生 crate**：`list_crates` → `module_tree` / `list_items(crate, kind)` → 逐个 `get_item`。见 §2。
+- **探索陌生 crate**：`list_crates` → `get_item(crate)`（crate 概览）/ `module_tree(crate)` → 逐个 `get_item`。见 §2。
 - **按签名找函数**：`find_by_signature(pattern)`。见 §3。
 - **正文全文检索**：`search_docs(query)`（扫描已导出的 markdown 正文）。见 §4。
 - **看 trait 有哪些实现者**：`get_trait_implementors(id)`。见 §5。
@@ -76,6 +76,29 @@ get_examples(id="tokio::task::fn.spawn")        → 代码示例
 | `find_by_signature` | 按签名子串检索（如 `-> Result`） |
 | `search_docs` | 在导出的 markdown 正文里全文检索 |
 | `rebuild_index` | 重建索引（默认增量） |
+
+### 参数速查（高频）
+
+| 工具 | 参数（**加粗**为必填） | 取值 / 说明 |
+|---|---|---|
+| `search_items` | **query**, crate?, kind?, mode?, limit?, offset? | `mode`: `substring`(默认)/`prefix`/`fuzzy`；`crate` 只填 crate 名 |
+| `list_items` | crate?, module?, kind?, limit?, offset? | `module` 填 crate 内**真实**模块名（不带 crate 前缀）；`kind` 见下 |
+| `get_item` | **id**, max_bytes? | `id` 取自检索结果的 `id`，可省略类型标记（`tokio::task::spawn`） |
+| `get_examples` | **id**, max_examples?, max_bytes? | `max_examples` 默认 5 |
+| `get_item_section` | **id**, **section** | section 如 `examples` / `panics` / `implementations` |
+| `module_tree` | **crate** | crate 的模块树（每级条目数） |
+| `find_by_signature` | **pattern**, crate?, kind?, limit? | 按签名子串，如 `-> Result<` |
+| `batch_get_items` | **ids**（≤20）, max_bytes_each? | 批量读正文 |
+| `search_docs` | **query**, crate?, kind?, limit?, offset? | 扫已导出正文，较慢 |
+
+`kind` 取值：`struct` / `enum` / `trait` / `fn`(function) / `method` / `field` / `variant` / `macro` / `module` / `const` / `type` / `union` 等，可用前缀、复数或自然名单数（`fn` / `functions` / `function`）；**非法值报错**，不会静默忽略。
+
+### 常见坑
+
+- **crate 首页不是条目**：`get_item(id="tokio")` 会回退返回合成概览（一级模块 + 一级条目 + 后续指引）；要模块树用 `module_tree`。
+- **`module` 过滤可能静默为空**：只认 crate 内真实模块段，**重导出别名**（`pub use X as m`）不是模块；空结果会带 `note` 列出可用一级模块，别把空当"不存在"。
+- **检索是名字/路径/子串匹配、无语义排序**：`search_items("Button")` 可能被 `Role::variant.Button` 之类同名成员刷屏；用 `crate` + `kind` 收窄，优先看 `has_docs:true` 的条目。
+- **`max_bytes` 在行边界截断**：被截断时正文不完整，用更大的 `max_bytes` 或 `get_item_section` 读剩余分节。
 
 ## 资源与 Prompts
 

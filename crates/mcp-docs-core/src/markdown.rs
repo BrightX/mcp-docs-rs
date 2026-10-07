@@ -260,13 +260,13 @@ fn strip_links(markdown: &str) -> String {
             break;
         };
         let after = &rest[open + 1..];
-        if let Some(bracket) = after.find("](") {
-            if let Some(paren) = after[bracket + 2..].find(')') {
-                out.push_str(&rest[..open]);
-                out.push_str(&after[..bracket]);
-                rest = &after[bracket + 2 + paren + 1..];
-                continue;
-            }
+        if let Some(bracket) = after.find("](")
+            && let Some(paren) = after[bracket + 2..].find(')')
+        {
+            out.push_str(&rest[..open]);
+            out.push_str(&after[..bracket]);
+            rest = &after[bracket + 2 + paren + 1..];
+            continue;
         }
         out.push_str(&rest[..=open]);
         rest = after;

@@ -114,16 +114,18 @@ fn ranked_hits(index: &Index, query: &SearchQuery) -> Vec<(usize, i32)> {
         })
         .collect();
 
-    // 排序三级键：得分降序 → 名字长度升序 → id 升序（与旧实现逐字节一致）。
+    // 排序键：
+    //   1) 得分降序（分数语义 100/80/60/40/20 保持不变）；
+    //   2) 语境次级键（仅同分时生效）：有文档 → 非成员 → 路径浅 → 名字短 → id 升序。
+    //      目的：让真正的顶层条目压过同名的成员 / 变体（见 issues E-3.9）。
     hits.sort_by(|a, b| {
+        let (left, right) = (&index.items[a.0], &index.items[b.0]);
         b.1.cmp(&a.1)
-            .then_with(|| {
-                index.items[a.0]
-                    .name
-                    .len()
-                    .cmp(&index.items[b.0].name.len())
-            })
-            .then_with(|| index.items[a.0].id.0.cmp(&index.items[b.0].id.0))
+            .then_with(|| right.has_docs.cmp(&left.has_docs))
+            .then_with(|| left.kind.is_member().cmp(&right.kind.is_member()))
+            .then_with(|| left.path.len().cmp(&right.path.len()))
+            .then_with(|| left.name.len().cmp(&right.name.len()))
+            .then_with(|| left.id.0.cmp(&right.id.0))
     });
     hits
 }
@@ -133,10 +135,10 @@ fn passes_filter(item: &ItemSummary, query: &SearchQuery) -> bool {
     if !query.kinds.is_empty() && !query.kinds.contains(&item.kind) {
         return false;
     }
-    if let Some(crate_name) = &query.crate_name {
-        if item.id.0.split("::").next() != Some(crate_name.as_str()) {
-            return false;
-        }
+    if let Some(crate_name) = &query.crate_name
+        && item.id.0.split("::").next() != Some(crate_name.as_str())
+    {
+        return false;
     }
     true
 }
@@ -250,4 +252,79 @@ fn find_ci(text: &str, needle: &str) -> Option<usize> {
             .zip(&target)
             .all(|(a, b)| a.eq_ignore_ascii_case(b))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Granularity, Index, ItemId};
+
+    /// 构造一个最小条目摘要。
+    fn summary(
+        id: &str,
+        kind: ItemKind,
+        name: &str,
+        path: &[&str],
+        has_docs: bool,
+        parent: Option<&str>,
+    ) -> ItemSummary {
+        ItemSummary {
+            id: ItemId(id.to_string()),
+            kind,
+            name: name.to_string(),
+            path: path.iter().map(|segment| (*segment).to_string()).collect(),
+            one_line: String::new(),
+            signature: None,
+            has_docs,
+            has_members: false,
+            file: String::new(),
+            html_path: String::new(),
+            parent_id: parent.map(str::to_string),
+            src_mtime: None,
+        }
+    }
+
+    /// 由给定条目构造一个最小索引。
+    fn index_with(items: Vec<ItemSummary>) -> Index {
+        Index {
+            schema_version: 0,
+            rustdoc_version: None,
+            generated_at: 0,
+            target_doc: String::new(),
+            granularity: Granularity::default(),
+            crates: Vec::new(),
+            items,
+        }
+    }
+
+    /// 同分时：有文档的非成员条目排在无文档的成员之前（issues E-3.9）。
+    #[test]
+    fn tie_break_prefers_documented_non_member() {
+        let index = index_with(vec![
+            summary(
+                "k::accesskit::enum.Role::variant.Button",
+                ItemKind::Variant,
+                "Button",
+                &["k", "accesskit", "Role"],
+                false,
+                Some("k::accesskit::enum.Role"),
+            ),
+            summary(
+                "k::button::struct.Button",
+                ItemKind::Struct,
+                "Button",
+                &["k", "button"],
+                true,
+                None,
+            ),
+        ]);
+
+        let hits = search(&index, &SearchQuery::new("Button"));
+        assert_eq!(hits.len(), 2);
+        // 两者名字精确命中，同为 100 分；次级键应把有文档的非成员排前。
+        assert_eq!(hits[0].score, 100);
+        assert_eq!(hits[1].score, 100);
+        assert_eq!(hits[0].item.id.0, "k::button::struct.Button");
+        assert_eq!(hits[1].item.id.0, "k::accesskit::enum.Role::variant.Button");
+    }
 }

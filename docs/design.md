@@ -180,6 +180,7 @@ pub enum MatchMode { Substring, Prefix, Fuzzy }
 pub fn search(idx: &Index, q: &str, mode: MatchMode, kinds: &[ItemKind],
               crate_filter: Option<&str>, limit: usize) -> Vec<SearchHit>;
 pub fn rank(item: &ItemSummary, q: &str) -> i32;   // 精确名 > 前缀 > path 命中 > 描述命中
+// 排序：得分降序，同分时按语境次级键（有文档 → 非成员 → 路径浅 → 名字短 → id，见 issues E-3.9）。
 ```
 
 ## 5. 解析算法

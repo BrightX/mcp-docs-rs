@@ -19,7 +19,7 @@ use rmcp::model::{
 use rmcp::schemars::{self, JsonSchema};
 use rmcp::service::RequestContext;
 use rmcp::{
-    tool, tool_handler, tool_router, ErrorData as McpError, Json, Peer, RoleServer, ServerHandler,
+    ErrorData as McpError, Json, Peer, RoleServer, ServerHandler, tool, tool_handler, tool_router,
 };
 use tokio::sync::Mutex;
 
@@ -401,8 +401,14 @@ impl ServerHandler for DocsServer {
                 .build(),
         )
         .with_instructions(
-            "检索本地 rustdoc 文档（可服务多个项目）。先用 list_projects 查看项目，\
-             再用 search_items / list_items 找到条目，最后用 get_item 读取 markdown；\
+            "检索本地 rustdoc 文档（可服务多个项目），遵循「先检索再读取」：\
+             1) 用 search_items{query, crate?, kind?, mode?, limit?, offset?} 或 \
+             list_items{crate?, module?, kind?, limit?, offset?} 定位条目（只返回摘要）；\
+             2) 用 get_item{id, max_bytes?} 读正文（id 取自检索结果的 id，可省略类型标记）；\
+             3) 按需用 get_examples{id} / get_item_section{id, section} / get_item_source{id} 补充。\
+             约定：`crate` 只填 crate 名；`module` 填 crate 内真实模块名（不带 crate 前缀），\
+             重导出别名不是模块、过滤为空时会返回提示；crate 首页不是条目，get_item 传 crate 名\
+             会回退给概览；`kind` 接受 fn/function/method/struct/trait/module/macro 等，非法值报错。\
              多项目时用 `project` 参数指定项目。",
         )
     }
@@ -443,9 +449,9 @@ impl ServerHandler for DocsServer {
     ) -> Result<ListResourcesResult, McpError> {
         self.remember_peer(context.peer.clone());
         // 不逐 crate 列举、也不等待就绪，避免多项目下资源列表膨胀或阻塞。
-        let mut resources =
-            vec![Resource::new("rustdoc://crates", "crates")
-                .with_description("缺省项目的全部 crate")];
+        let mut resources = vec![
+            Resource::new("rustdoc://crates", "crates").with_description("缺省项目的全部 crate"),
+        ];
         if self.order.len() > 1 {
             for name in self.order.iter() {
                 resources.push(
@@ -600,7 +606,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use mcp_docs_core::{build, BuildOptions};
+    use mcp_docs_core::{BuildOptions, build};
 
     use super::*;
 
@@ -729,9 +735,11 @@ mod tests {
     fn prompt_definitions_and_build() {
         let definitions = prompt_definitions();
         assert_eq!(definitions.len(), 2);
-        assert!(definitions
-            .iter()
-            .any(|prompt| prompt.name == "explain_api"));
+        assert!(
+            definitions
+                .iter()
+                .any(|prompt| prompt.name == "explain_api")
+        );
 
         let messages = build_prompt("explain_api", "doc_probe::struct.Demo", None).unwrap();
         assert_eq!(messages.len(), 1);
@@ -928,10 +936,12 @@ mod tests {
         assert!(markdown.contains("Demo"));
 
         // 未知项目报错。
-        assert!(server
-            .read_uri("rustdoc://crates?project=nope")
-            .await
-            .is_err());
+        assert!(
+            server
+                .read_uri("rustdoc://crates?project=nope")
+                .await
+                .is_err()
+        );
     }
 
     /// 资源条目 id 容错：`struct/Demo`（把 kind 与 name 间的点误写成斜杠）也能命中。
@@ -991,5 +1001,75 @@ mod tests {
             })
             .unwrap_err();
         assert!(err.contains("export"), "应提示先导出正文：{err}");
+    }
+
+    /// `module` 过滤零命中时返回可执行提示，而非静默空结果（issues E-3.7）。
+    #[tokio::test]
+    async fn list_items_module_miss_returns_note() {
+        let (server, _out) = server_with_index();
+        let project = default_project(&server);
+        project.ensure_ready().await;
+
+        let text = project
+            .list_items_blocking(ListItemsParams {
+                crate_name: Some("doc_probe".to_string()),
+                module: Some("不存在".to_string()),
+                kind: None,
+                limit: None,
+                offset: None,
+                project: None,
+            })
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["total"], 0);
+        let note = value["note"].as_str().unwrap();
+        assert!(note.contains("module=`不存在`"), "note: {note}");
+        assert!(note.contains("search_items"), "note: {note}");
+    }
+
+    /// `module` 带 crate 前缀时被归一化后仍能命中（issues E-3.7）。
+    #[tokio::test]
+    async fn list_items_module_strips_crate_prefix() {
+        let (server, _out) = server_with_index();
+        let project = default_project(&server);
+        project.ensure_ready().await;
+
+        let text = project
+            .list_items_blocking(ListItemsParams {
+                crate_name: Some("doc_probe".to_string()),
+                module: Some("doc_probe::inner".to_string()),
+                kind: None,
+                limit: None,
+                offset: None,
+                project: None,
+            })
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(value["total"].as_u64().unwrap() >= 1, "{value}");
+        let ids: Vec<&str> = value["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap())
+            .collect();
+        assert!(ids.iter().any(|id| id.contains("inner")), "{ids:?}");
+    }
+
+    /// crate 首页可作为条目读取（合成概览），见 issues E-3.8。
+    #[tokio::test]
+    async fn get_item_crate_name_returns_overview() {
+        let (server, _out) = server_with_index();
+        let project = default_project(&server);
+        project.ensure_ready().await;
+
+        let md = project
+            .get_item_blocking(ItemParams {
+                id: "doc_probe".to_string(),
+                max_bytes: None,
+                project: None,
+            })
+            .unwrap();
+        assert!(md.contains("doc_probe"), "概览应含 crate 名：{md}");
+        assert!(md.contains("一级条目"), "概览应含一级条目：{md}");
     }
 }

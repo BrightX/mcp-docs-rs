@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 use scraper::{ElementRef, Html, Node, Selector};
 
 use crate::error::{Error, Result};
-use crate::link::{resolve_href, Resolved};
+use crate::link::{Resolved, resolve_href};
 use crate::model::{DocItem, ItemId, ItemKind, Section, SourceRef};
 
 /// 解析并缓存内置选择器。
@@ -517,15 +517,14 @@ fn collect_source_lines(el: &ElementRef, lines: &mut Vec<String>, current: &mut 
             }
             Node::Element(inner) => {
                 // 行号锚点：只取其 `id` 作为行号，跳过其文本（号码本身）。
-                if inner.name() == "a" {
-                    if let Some(line_no) = inner.attr("id").and_then(|id| id.parse::<usize>().ok())
-                    {
-                        *current = Some(line_no);
-                        if lines.len() < line_no {
-                            lines.resize(line_no, String::new());
-                        }
-                        continue;
+                if inner.name() == "a"
+                    && let Some(line_no) = inner.attr("id").and_then(|id| id.parse::<usize>().ok())
+                {
+                    *current = Some(line_no);
+                    if lines.len() < line_no {
+                        lines.resize(line_no, String::new());
                     }
+                    continue;
                 }
                 if let Some(child) = ElementRef::wrap(child) {
                     collect_source_lines(&child, lines, current);

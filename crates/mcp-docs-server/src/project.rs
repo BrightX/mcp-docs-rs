@@ -12,13 +12,13 @@ use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard};
 
 use rmcp::schemars::{self, JsonSchema};
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{Mutex, watch};
 
 use mcp_docs_core::{
-    build, extract_code_blocks, extract_source_lines, find_trait_impl_paths, is_stale, load_index,
-    module_tree, parse_trait_impls, related_items, render_item, render_member_item, rewrite_links,
-    search_page, BuildOptions, DocCache, DocItem, Granularity, IdIndex, Index, ItemKind,
-    ItemSummary, ParseOptions, RenderOptions, SearchQuery, INDEX_SCHEMA_VERSION,
+    BuildOptions, DocCache, DocItem, Granularity, INDEX_SCHEMA_VERSION, IdIndex, Index, ItemKind,
+    ItemSummary, ParseOptions, RenderOptions, SearchQuery, build, extract_code_blocks,
+    extract_source_lines, find_trait_impl_paths, is_stale, load_index, module_tree,
+    parse_trait_impls, related_items, render_item, render_member_item, rewrite_links, search_page,
 };
 
 /// `list_items` 的参数。
@@ -693,11 +693,19 @@ impl Project {
         let index = self.index();
         let kind = params.kind.as_deref().map(parse_kind).transpose()?;
 
+        // 归一化 `module`：剥离前导 `::`，首段等于 crate 名时剥离 crate 前缀
+        //（`gpui_kit::component` → `component`）。见 issues E-3.7。
+        let module = params
+            .module
+            .as_deref()
+            .map(|module| normalize_module(module, params.crate_name.as_deref()));
+        let module = module.as_deref();
+
         let filtered: Vec<&ItemSummary> = index
             .items
             .iter()
             .filter(|item| matches_crate(item, params.crate_name.as_deref()))
-            .filter(|item| matches_module(item, params.module.as_deref()))
+            .filter(|item| matches_module(item, module))
             .filter(|item| kind.is_none_or(|wanted| item.kind == wanted))
             .collect();
 
@@ -710,11 +718,21 @@ impl Project {
             .map(|item| summary_json(item))
             .collect();
 
+        // 指定了非空 `module` 却零命中：多半是重导出别名或写错模块名（过滤时静默落空）。
+        // 给一条可执行提示，避免把空结果误读成"不存在"（见 issues E-3.7）。
+        let note = match (filtered.is_empty(), module) {
+            (true, Some(module)) if !module.is_empty() => {
+                module_miss_note(&index.items, params.crate_name.as_deref(), module)
+            }
+            _ => String::new(),
+        };
+
         Ok(to_json(&serde_json::json!({
             "total": filtered.len(),
             "offset": offset,
             "returned": items.len(),
             "items": items,
+            "note": note,
         })))
     }
 
@@ -760,9 +778,14 @@ impl Project {
     /// `get_item` 的同步实现。
     pub(crate) fn get_item_blocking(&self, params: ItemParams) -> Result<String, String> {
         let index = self.index();
-        let summary = index
-            .find(&params.id)
-            .ok_or_else(|| format!("未找到条目 `{}`", params.id))?;
+        let Some(summary) = index.find(&params.id) else {
+            // crate 首页不是索引条目（见 issues E-3.8）：id 恰为已索引 crate 名时，
+            // 回退给一份合成概览，而不是直接报「未找到条目」。
+            return match crate_overview(&index, &params.id) {
+                Some(overview) => Ok(truncate(overview, params.max_bytes)),
+                None => Err(format!("未找到条目 `{}`", params.id)),
+            };
+        };
         let item = self.load_item(summary)?;
         let options = RenderOptions::default();
 
@@ -832,11 +855,11 @@ impl Project {
         // 只从文档正文抽取示例，排除条目/成员的签名代码块（E-1.2）。
         let mut text = String::new();
         if summary.kind.is_member() {
-            if let Some(member) = item.members.iter().find(|member| member.id == summary.id) {
-                if let Some(docs) = &member.docs_md {
-                    text.push_str(docs);
-                    text.push('\n');
-                }
+            if let Some(member) = item.members.iter().find(|member| member.id == summary.id)
+                && let Some(docs) = &member.docs_md
+            {
+                text.push_str(docs);
+                text.push('\n');
             }
         } else {
             if let Some(docs) = &item.docs_md {
@@ -1256,6 +1279,67 @@ fn empty_index(doc_dir: &Path) -> Index {
     }
 }
 
+/// 合成某个 crate 的概览 markdown；`name` 不是已索引 crate 时返回 `None`。
+///
+/// crate 首页（`{crate}/index.html` 的 top-doc）不是 sidebar 条目，故不进入索引，
+/// `get_item(crate 名)` 会直接落空。这里按索引合成一份概览：一级模块 + 一级条目 +
+/// 后续调用指引（见 issues E-3.8）。
+fn crate_overview(index: &Loaded, name: &str) -> Option<String> {
+    let crate_summary = index.crates.iter().find(|crate_| crate_.name == name)?;
+
+    let mut md = String::new();
+    md.push_str(&format!("# {name}\n\n"));
+    md.push_str(&format!(
+        "> crate `{name}` 的概览（crate 首页不是索引条目，这里按索引合成）。共 {} 条目。\n\n",
+        crate_summary.item_count
+    ));
+
+    let modules = top_level_modules(&index.items, name);
+    if !modules.is_empty() {
+        md.push_str("## 模块\n\n");
+        for module in &modules {
+            md.push_str(&format!("- `{name}::{module}`\n"));
+        }
+        md.push('\n');
+    }
+
+    let top: Vec<&ItemSummary> = index
+        .items
+        .iter()
+        .filter(|item| item.id.0.split("::").next() == Some(name))
+        .filter(|item| item.parent_id.is_none() && !item.kind.is_member())
+        .collect();
+    if !top.is_empty() {
+        const MAX_TOP: usize = 200;
+        md.push_str("## 一级条目\n\n");
+        for item in top.iter().take(MAX_TOP) {
+            if item.one_line.is_empty() {
+                md.push_str(&format!("- `{}`（{}）\n", item.id.0, kind_name(item.kind)));
+            } else {
+                md.push_str(&format!(
+                    "- `{}`（{}）：{}\n",
+                    item.id.0,
+                    kind_name(item.kind),
+                    item.one_line
+                ));
+            }
+        }
+        if top.len() > MAX_TOP {
+            md.push_str(&format!(
+                "\n…（另有 {} 个顶层条目，用 `list_items` 分页查看）\n",
+                top.len() - MAX_TOP
+            ));
+        }
+        md.push('\n');
+    }
+
+    md.push_str(&format!(
+        "后续：`list_items(crate=\"{name}\")` 列条目、`module_tree(crate=\"{name}\")` 看模块树、\
+         `search_items(query=\"…\", crate=\"{name}\")` 检索。\n"
+    ));
+    Some(md)
+}
+
 /// 条目摘要的 JSON 表示。
 pub(crate) fn summary_json(item: &ItemSummary) -> serde_json::Value {
     serde_json::json!({
@@ -1318,6 +1402,57 @@ pub(crate) fn matches_module(item: &ItemSummary, module: Option<&str>) -> bool {
     wanted.all(|segment| actual.next().map(String::as_str) == Some(segment))
 }
 
+/// 归一化 `module` 参数：剥离前导 `::`；首段等于 crate 名时剥离 crate 前缀。
+///
+/// 让 `module="gpui_kit::component"` 与 `module="component"` 等价（见 issues E-3.7）。
+pub(crate) fn normalize_module(module: &str, crate_name: Option<&str>) -> String {
+    let trimmed = module.trim().trim_start_matches("::");
+    if let Some(crate_name) = crate_name
+        && let Some(rest) = trimmed.strip_prefix(crate_name)
+        && let Some(rest) = rest.strip_prefix("::")
+    {
+        return rest.to_string();
+    }
+    trimmed.to_string()
+}
+
+/// 指定 `module` 却零命中时的提示：列出该 crate 的一级模块，指引改用 `search_items`。
+///
+/// 重导出别名（`pub use X as m`）不是模块、不会进入条目的 `path`，过滤时静默落空，
+/// 空结果与"确实无此模块"无法区分（见 issues E-3.7）。
+fn module_miss_note(items: &[ItemSummary], crate_name: Option<&str>, module: &str) -> String {
+    let Some(crate_name) = crate_name.filter(|name| !name.is_empty()) else {
+        return format!(
+            "没有条目命中 module=`{module}`；module 需为 crate 内的真实模块名（不带 crate 前缀），\
+             重导出别名不是模块。可用 search_items 复核。"
+        );
+    };
+    let modules = top_level_modules(items, crate_name);
+    if modules.is_empty() {
+        format!("crate `{crate_name}` 下没有条目命中 module=`{module}`。")
+    } else {
+        format!(
+            "crate `{crate_name}` 下没有条目命中 module=`{module}`；可用一级模块：{}。\
+             注意 module 需为 crate 内的真实模块名（不带 crate 前缀），重导出别名不是模块；\
+             也可用 search_items 复核。",
+            modules.join(", ")
+        )
+    }
+}
+
+/// 某个 crate 的**真实一级模块名**（`ItemKind::Module` 且挂在 crate 根下）。
+///
+/// 注意不能用 `module_tree` 的根子节点：成员条目的 `path` 含其父类型名，会在树里
+/// 生成同名的非模块节点（如 `Demo`），据此提示"可用模块"会误导。
+fn top_level_modules(items: &[ItemSummary], crate_name: &str) -> Vec<String> {
+    items
+        .iter()
+        .filter(|item| item.id.0.split("::").next() == Some(crate_name))
+        .filter(|item| item.kind == ItemKind::Module && item.path.len() == 1)
+        .map(|item| item.name.clone())
+        .collect()
+}
+
 /// ASCII 大小写不敏感的子串匹配（`needle` 需已小写）。
 pub(crate) fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     let hay = haystack.as_bytes();
@@ -1360,7 +1495,10 @@ pub(crate) fn to_json(value: &serde_json::Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|err| format!("序列化失败：{err}"))
 }
 
-/// 按字节上限截断文本（保证 UTF-8 字符边界），并附带提示。
+/// 按字节上限截断文本，并附带提示。
+///
+/// 先退到 UTF-8 字符边界；若附近有行边界（`\n`）则对齐整行，避免把正文 / 示例
+/// 从中间切断（见 issues E-3.10）。
 pub(crate) fn truncate(text: String, max_bytes: Option<usize>) -> String {
     let Some(limit) = max_bytes else {
         return text;
@@ -1372,5 +1510,15 @@ pub(crate) fn truncate(text: String, max_bytes: Option<usize>) -> String {
     while end > 0 && !text.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}\n\n…（内容已按 max_bytes={limit} 截断）", &text[..end])
+    // 仅在回退幅度不大时对齐整行，避免为凑行边界而丢太多内容。
+    if let Some(newline) = text[..end].rfind('\n')
+        && newline > 0
+        && end - newline <= 200
+    {
+        end = newline;
+    }
+    format!(
+        "{}\n\n…（内容已按 max_bytes={limit} 截断；可用更大的 max_bytes 或 `get_item_section` 读取其余分节）",
+        &text[..end]
+    )
 }
