@@ -170,6 +170,16 @@ MCP_DOCS_PROJECTS="core=/repo/a/target/doc;svc=/repo/b/target/doc" \
 
 典型流程：`search_items("spawn", crate="tokio")` → `get_item("tokio::spawn")` → 只拿到这一小块。
 
+### 八、Skill（可选）
+
+仓库的 `skills/mcp-docs/` 是一份 Agent Skill：它告诉模型何时、如何调用上面的工具（先检索再读取、参数含义、常见坑）。建议把它整个目录复制到 MCP 客户端的 skills 目录，让 Agent 自动按正确姿势使用本服务，例如 Claude Code / Codebuddy 的 `~/.claude/skills/`：
+
+```bash
+cp -r skills/mcp-docs ~/.claude/skills/
+```
+
+也可直接解压打包好的 `skills/dist/mcp-docs.zip` 到同一位置。请按你所使用客户端的 skills 目录约定放置。
+
 ## 快速开始
 
 ```bash

@@ -170,6 +170,16 @@ In multi-project mode, all of the above tools accept an optional `project` argum
 
 Typical flow: `search_items("spawn", crate="tokio")` → `get_item("tokio::spawn")` → only that small slice is returned.
 
+### 8. Skill (optional)
+
+`skills/mcp-docs/` is an Agent Skill: it tells the model when and how to call the tools above (search first then read, argument meanings, common pitfalls). Copy the whole directory into your MCP client's skills directory so the agent uses the server correctly, e.g. Claude Code / Codebuddy's `~/.claude/skills/`:
+
+```bash
+cp -r skills/mcp-docs ~/.claude/skills/
+```
+
+You can also unzip the packaged `skills/dist/mcp-docs.zip` into the same location. Follow whichever skills-directory convention your client uses.
+
 ## Quick start
 
 ```bash
