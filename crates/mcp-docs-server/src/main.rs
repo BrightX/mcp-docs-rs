@@ -4,13 +4,12 @@ mod config;
 mod project;
 mod server;
 
-use clap::Parser;
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args = config::Args::parse();
+    let args = config::Args::from_env()?;
     let cfg = config::resolve_config(&args)?;
 
     let service = server::DocsServer::from_projects(cfg.projects, cfg.default_project, cfg.store)?

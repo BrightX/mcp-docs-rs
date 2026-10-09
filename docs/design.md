@@ -305,7 +305,7 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 多个项目依赖同一 crate（如同一版本 tokio）时，其条目摘要与 markdown 只解析渲染一次，存入共享库被各项目复用。
 
 ```
-<store_root>/                          # 默认平台缓存目录（--store / MCP_DOCS_STORE 覆盖）
+<store_root>/                          # 默认平台缓存目录（MCP_DOCS_STORE 覆盖）
 └── shared/
     └── <key_dir>/                     # key = {crate}-{version}-{hash8}
         ├── meta.json                  # 身份字段 + schema + 时间（最后写；缺它视为半成品）
@@ -378,7 +378,9 @@ mcp-docs show   <id> [--doc-dir target/doc]                          # 打印单
 mcp-docs search <query> [--crate X] [--limit N] [--offset N]         # 检索（可分页）
 ```
 
-全局参数新增 `--store DIR`（env `MCP_DOCS_STORE`），指向跨项目共享索引库；缺省用平台缓存目录。`export` 的输出会打印「共享库命中 / 写入」计数。server 另提供 `--no-store` 关闭共享库（不读也不写全局缓存）。
+全局参数新增 `--store DIR`（env `MCP_DOCS_STORE`），指向跨项目共享索引库；缺省用平台缓存目录。`export` 的输出会打印「共享库命中 / 写入」计数。
+
+MCP server 的启动参数**全部通过环境变量传入**（不解析命令行）：`MCP_DOCS_DIR` / `MCP_DOCS_OUT`（单项目便捷写法）、`MCP_DOCS_PROJECTS`（分号分隔的 `NAME=DOC_DIR` 列表）、`MCP_DOCS_PROJECTS_FILE`（JSON 清单）、`MCP_DOCS_STORE`、`MCP_DOCS_NO_STORE`（非空即关闭共享库，不读也不写全局缓存）、`MCP_DOCS_DEFAULT_PROJECT`。
 
 ## 10. 测试策略
 

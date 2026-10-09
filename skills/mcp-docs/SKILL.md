@@ -131,7 +131,7 @@ cargo run -p mcp-docs-cli -- show <id>
 - **`search_docs` 较慢**：它扫描已导出的 markdown 正文，仅在需要正文命中时使用；若正文尚未导出（仅启动 server），会返回提示而非空结果。结构化字段检索优先用 `search_items` / `find_by_signature`。
 - **通知**：后台构建完成或 `rebuild_index` 成功后，服务会发 `notifications/resources/list_changed`，客户端可据此刷新资源清单。
 - **多项目用 `project`**：工具/资源省略 `project` 时用缺省项目；非缺省项目首次访问才后台构建，首次调用会等待其就绪。各项目共享同一份依赖索引库，同一版本依赖只解析一次。
-- **共享索引库默认开启**：server 默认读写平台缓存目录（跨项目复用依赖索引）；不需要时用 `--no-store` 关闭。
+- **共享索引库默认开启**：server 默认读写平台缓存目录（跨项目复用依赖索引）；不需要时用 `MCP_DOCS_NO_STORE` 关闭。
 
 ## 附带资源
 

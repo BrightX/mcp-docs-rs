@@ -53,7 +53,7 @@
 ### 五、多项目与跨项目共享索引库
 
 - **单进程多项目**：一个 `mcp-docs-server` 进程服务多个项目；工具 / 资源用可选 `project` 参数定位，缺省用默认项目。除缺省项目外，其余项目首次被访问时才懒启动构建，所有项目构建共用一把锁串行执行。
-- **跨项目共享库**：多个项目依赖同一 crate（同一版本 + rustdoc 版本 + 粒度）时，其索引摘要与 markdown 只解析渲染一次；命中后以**硬链接**（同卷）/ **复制**（跨卷）物化到项目目录。默认位于平台缓存目录，可用 `--store` / `MCP_DOCS_STORE` 覆盖，`--no-store` 关闭。
+- **跨项目共享库**：多个项目依赖同一 crate（同一版本 + rustdoc 版本 + 粒度）时，其索引摘要与 markdown 只解析渲染一次；命中后以**硬链接**（同卷）/ **复制**（跨卷）物化到项目目录。默认位于平台缓存目录，可用 `MCP_DOCS_STORE` 覆盖，`MCP_DOCS_NO_STORE` 关闭。
 
 ### 六、命令行工具 `mcp-docs`
 
@@ -68,22 +68,35 @@
 
 ### 七、MCP 服务
 
+参数**全部通过环境变量传入**（不再解析命令行参数）。
+
 单项目：
 
 ```bash
-cargo run -p mcp-docs-server -- --doc-dir target/doc --out-dir target/doc-search
+MCP_DOCS_DIR=target/doc MCP_DOCS_OUT=target/doc-search cargo run -p mcp-docs-server
 ```
 
 多项目（共享一份依赖索引库）：
 
 ```bash
-cargo run -p mcp-docs-server -- \
-  --project core=/repo/a/target/doc \
-  --project svc=/repo/b/target/doc \
-  --store ~/.cache/mcp-docs
+MCP_DOCS_PROJECTS="core=/repo/a/target/doc;svc=/repo/b/target/doc" \
+  MCP_DOCS_STORE=~/.cache/mcp-docs \
+  cargo run -p mcp-docs-server
 ```
 
-在 MCP 客户端中注册该命令即可使用。除缺省项目外，其余项目**首次被访问时**才后台构建。设计原则是**先搜后读**：检索工具只返回轻量摘要 + 指针，读取工具才返回正文。
+环境变量：
+
+| 变量 | 含义 |
+|---|---|
+| `MCP_DOCS_DIR` | 单项目 rustdoc 产物目录（映射为名为 `default` 的项目） |
+| `MCP_DOCS_OUT` | 单项目输出目录 |
+| `MCP_DOCS_PROJECTS` | 分号分隔的 `NAME=DOC_DIR` 列表 |
+| `MCP_DOCS_PROJECTS_FILE` | 项目清单 JSON 文件（`{ default?, store?, projects: [{name, doc_dir, out_dir?}] }`） |
+| `MCP_DOCS_STORE` | 共享索引库根目录（缺省用平台缓存目录） |
+| `MCP_DOCS_NO_STORE` | 非空取值（`1`/`true`/`yes`/`on`）时关闭共享库 |
+| `MCP_DOCS_DEFAULT_PROJECT` | 缺省项目名 |
+
+在 MCP 客户端中注册该服务（在其 `env` 字段中配置上述变量）即可使用。除缺省项目外，其余项目**首次被访问时**才后台构建。设计原则是**先搜后读**：检索工具只返回轻量摘要 + 指针，读取工具才返回正文。
 
 **工具（18 个）**
 

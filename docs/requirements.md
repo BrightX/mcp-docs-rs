@@ -62,7 +62,7 @@ Agent 需要知道 `tokio::spawn` 的签名与用法 →
 | 工程结构 | 3-crate workspace：`mcp-docs-core`（纯库）/ `mcp-docs-cli` / `mcp-docs-server` |
 | 检索粒度 | 按条目分文件 + 全局索引；成员默认独立成文件**且**内联进父文件；`--granularity=item` 时成员仅内联、不落盘 |
 | 输出位置 | 可配置，默认项目内 `target/doc-search/`；CLI `--out` 与 server 启动参数可覆盖 |
-| 共享库位置 | 跨项目复用的索引库默认位于平台缓存目录（可用 `--store` / `MCP_DOCS_STORE` 覆盖）；键为「crate 名 + 版本 + rustdoc 版本 + 粒度 + stat 指纹」 |
+| 共享库位置 | 跨项目复用的索引库默认位于平台缓存目录（可用 `MCP_DOCS_STORE` 覆盖）；键为「crate 名 + 版本 + rustdoc 版本 + 粒度 + stat 指纹」 |
 | MCP SDK | `rmcp`（官方 Rust SDK，当前 3.5.0），锁精确版本 |
 | 文档管理 | 需求 / 设计 / 进度文档统一放在 `docs/` 下 |
 

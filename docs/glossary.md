@@ -92,5 +92,5 @@
 | #3.33 | 项目、Project | 单个项目的运行时状态（索引 / 缓存 / 就绪 / 懒启动） | `crates/mcp-docs-server/src/project.rs::Project` |
 | #3.34 | 项目解析、resolve | 由 `project` 名（或缺省）找到项目并确保启动 | `server.rs::DocsServer::resolve` |
 | #3.35 | 项目清单、list_projects | 列出全部项目及就绪状态（不阻塞） | `server.rs::list_projects` |
-| #3.36 | 启动配置 | 多项目启动参数解析（`--project` / `--projects-file` / `--store`） | `crates/mcp-docs-server/src/config.rs::resolve_config` |
+| #3.36 | 启动配置 | 多项目启动配置解析（`MCP_DOCS_PROJECTS` / `MCP_DOCS_PROJECTS_FILE` / `MCP_DOCS_STORE` 等环境变量） | `crates/mcp-docs-server/src/config.rs::resolve_config` |
 | #3.37 | 共享构建锁 | 串行化各项目全量构建，避免并发抢占资源 | `server.rs::from_projects`（`build_lock`）；`project.rs::refresh_index` |

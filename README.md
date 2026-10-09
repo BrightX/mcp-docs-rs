@@ -53,7 +53,7 @@ The HTML produced by `cargo doc` is a poor fit for agents to read directly: it m
 ### 5. Multi-project & cross-project shared index store
 
 - **Multi-project in one process**: a single `mcp-docs-server` process serves many projects; tools / resources take an optional `project` argument (defaulting to the default project). Except for the default project, other projects are lazily built on first access, and all builds share one lock and run serially.
-- **Cross-project shared store**: when several projects depend on the same crate (same version + rustdoc version + granularity), its index summaries and markdown are parsed and rendered once; on a hit they are materialized into the project directory via **hard links** (same volume) / **copy** (cross volume). It lives in the platform cache directory by default, overridable via `--store` / `MCP_DOCS_STORE`, and disabled with `--no-store`.
+- **Cross-project shared store**: when several projects depend on the same crate (same version + rustdoc version + granularity), its index summaries and markdown are parsed and rendered once; on a hit they are materialized into the project directory via **hard links** (same volume) / **copy** (cross volume). It lives in the platform cache directory by default, overridable via `MCP_DOCS_STORE`, and disabled with `MCP_DOCS_NO_STORE`.
 
 ### 6. Command-line tool `mcp-docs`
 
@@ -68,22 +68,35 @@ Global options: `--doc-dir` (default `target/doc`), `--out` (default `target/doc
 
 ### 7. MCP server
 
+Configuration is passed entirely via **environment variables** (no command-line arguments).
+
 Single project:
 
 ```bash
-cargo run -p mcp-docs-server -- --doc-dir target/doc --out-dir target/doc-search
+MCP_DOCS_DIR=target/doc MCP_DOCS_OUT=target/doc-search cargo run -p mcp-docs-server
 ```
 
 Multiple projects (sharing one dependency index store):
 
 ```bash
-cargo run -p mcp-docs-server -- \
-  --project core=/repo/a/target/doc \
-  --project svc=/repo/b/target/doc \
-  --store ~/.cache/mcp-docs
+MCP_DOCS_PROJECTS="core=/repo/a/target/doc;svc=/repo/b/target/doc" \
+  MCP_DOCS_STORE=~/.cache/mcp-docs \
+  cargo run -p mcp-docs-server
 ```
 
-Register this command in your MCP client to use it. Except for the default project, other projects are built in the background only **on first access**. The design principle is **search first, then read**: search tools return only lightweight summaries + pointers, and only read tools return bodies.
+Environment variables:
+
+| Variable | Meaning |
+|---|---|
+| `MCP_DOCS_DIR` | Single-project rustdoc output dir (mapped to a project named `default`) |
+| `MCP_DOCS_OUT` | Single-project output dir |
+| `MCP_DOCS_PROJECTS` | Semicolon-separated `NAME=DOC_DIR` list |
+| `MCP_DOCS_PROJECTS_FILE` | JSON manifest (`{ default?, store?, projects: [{name, doc_dir, out_dir?}] }`) |
+| `MCP_DOCS_STORE` | Shared index store root (default platform cache dir) |
+| `MCP_DOCS_NO_STORE` | Disable the shared store when set (`1`/`true`/`yes`/`on`) |
+| `MCP_DOCS_DEFAULT_PROJECT` | Default project name |
+
+Register this server in your MCP client (via its `env` field) to use it. Except for the default project, other projects are built in the background only **on first access**. The design principle is **search first, then read**: search tools return only lightweight summaries + pointers, and only read tools return bodies.
 
 **Tools (18)**
 

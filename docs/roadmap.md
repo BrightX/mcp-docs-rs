@@ -262,7 +262,7 @@
 - 身份键来源：crate 首页 `<span class="version">` + `data-rustdoc-version`（新增 `parse_crate_version`）。
 - `core::build`：`BuildOptions` 增 `store`；`BuildReport` 增 `shared_hits` / `shared_written`；命中 crate 跳过发现与解析；复用条目按本项目 mtime 回填 `src_mtime`。
 - **单进程多项目**：server 抽出 `Project`（每项目独立索引 / 缓存 / 就绪信号 / 懒启动）；`DocsServer` 改为项目注册表 + `resolve` + 共享构建锁；新增 `list_projects`；17 个工具新增可选 `project` 参数。
-- **启动参数**：`--project NAME=DOC_DIR`（可重复）/ `--projects-file`（JSON）/ `--store` / `--default-project`；旧 `--doc-dir` / `--out-dir` 映射为 `default` 项目。CLI 新增全局 `--store`。
+- **启动参数（全部经环境变量传入，不解析命令行）**：`MCP_DOCS_DIR` / `MCP_DOCS_OUT`（映射为 `default` 项目）、`MCP_DOCS_PROJECTS`（分号分隔 `NAME=DOC_DIR`）、`MCP_DOCS_PROJECTS_FILE`（JSON）、`MCP_DOCS_STORE`、`MCP_DOCS_NO_STORE`、`MCP_DOCS_DEFAULT_PROJECT`。CLI 新增全局 `--store`。
 - **资源 URI（不破坏）**：`rustdoc://crates`、`rustdoc://{crate}`、`rustdoc://{crate}/{item}` 保留，新增 `?project=NAME` 消歧；`list_resources` 缩减为项目级（不逐 crate 列举、不阻塞）。
 - `atomic_write` 临时名改为进程唯一，避免多进程并发写共享库撕裂。
 

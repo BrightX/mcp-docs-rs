@@ -1,10 +1,27 @@
-//! MCP 服务的启动配置解析。
+//! MCP 服务的启动配置解析（全部通过环境变量传入）。
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use clap::{ArgAction, Parser};
+
+/// 启动配置所用的环境变量名。
+pub mod env {
+    /// rustdoc 产物目录（单项目便捷写法，映射为名为 `default` 的项目）。
+    pub const DOC_DIR: &str = "MCP_DOCS_DIR";
+    /// 输出目录（单项目便捷写法）。
+    pub const OUT_DIR: &str = "MCP_DOCS_OUT";
+    /// 追加多个项目：分号分隔的 `NAME=DOC_DIR` 列表，如 `core=./target/doc;svc=./svc/target/doc`。
+    pub const PROJECTS: &str = "MCP_DOCS_PROJECTS";
+    /// 项目清单 JSON 文件（`{ default?, store?, projects: [{name, doc_dir, out_dir?}] }`）。
+    pub const PROJECTS_FILE: &str = "MCP_DOCS_PROJECTS_FILE";
+    /// 共享库根目录（跨项目复用 crate 文档索引）；缺省用平台缓存目录。
+    pub const STORE: &str = "MCP_DOCS_STORE";
+    /// 关闭共享库：非空取值（`1`/`true`/`yes`/`on`）时开启，不读也不写全局缓存。
+    pub const NO_STORE: &str = "MCP_DOCS_NO_STORE";
+    /// 缺省项目名。
+    pub const DEFAULT_PROJECT: &str = "MCP_DOCS_DEFAULT_PROJECT";
+}
 
 /// 一个项目的配置。
 #[derive(Debug, Clone)]
@@ -28,41 +45,50 @@ pub struct ServerConfig {
     pub store: Option<PathBuf>,
 }
 
-/// server 启动参数。
-#[derive(Debug, Parser)]
-#[command(
-    name = "mcp-docs-server",
-    version,
-    about = "以 MCP 服务形式检索本地 rustdoc 文档"
-)]
+/// server 启动参数（全部来自环境变量，不解析命令行）。
+#[derive(Debug, Clone, Default)]
 pub struct Args {
-    /// rustdoc 产物目录（单项目便捷写法，映射为名为 `default` 的项目）。
-    #[arg(long, env = "MCP_DOCS_DIR")]
+    /// 单项目便捷写法的 rustdoc 产物目录。
     doc_dir: Option<PathBuf>,
-
-    /// 输出目录（单项目便捷写法）。
-    #[arg(long, env = "MCP_DOCS_OUT")]
+    /// 单项目便捷写法的输出目录。
     out_dir: Option<PathBuf>,
-
-    /// 追加一个项目：`NAME=DOC_DIR`，可重复（如 `--project core=./target/doc`）。
-    #[arg(long = "project", value_parser = parse_project_arg, action = ArgAction::Append)]
+    /// `MCP_DOCS_PROJECTS` 解析出的项目列表。
     projects: Vec<ProjectArg>,
-
-    /// 项目清单 JSON 文件（`{ default?, store?, projects: [{name, doc_dir, out_dir?}] }`）。
-    #[arg(long)]
+    /// 项目清单 JSON 文件路径。
     projects_file: Option<PathBuf>,
-
-    /// 共享库根目录（跨项目复用 crate 文档索引）；缺省用平台缓存目录。
-    #[arg(long, env = "MCP_DOCS_STORE")]
+    /// 共享库根目录。
     store: Option<PathBuf>,
-
-    /// 关闭共享库：不读也不写全局缓存，仅用各项目本地的索引与产物。
-    #[arg(long)]
+    /// 是否关闭共享库。
     no_store: bool,
-
     /// 缺省项目名。
-    #[arg(long)]
     default_project: Option<String>,
+}
+
+impl Args {
+    /// 从进程环境变量加载启动参数。
+    pub fn from_env() -> anyhow::Result<Self> {
+        Self::from_lookup(|key| std::env::var(key).ok())
+    }
+
+    /// 从任意「键 → 值」查找函数加载参数（便于测试注入）。
+    fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
+        let non_empty = |key: &str| lookup(key).filter(|value| !value.trim().is_empty());
+
+        let projects = match non_empty(env::PROJECTS) {
+            Some(raw) => parse_projects(&raw)?,
+            None => Vec::new(),
+        };
+
+        Ok(Self {
+            doc_dir: non_empty(env::DOC_DIR).map(PathBuf::from),
+            out_dir: non_empty(env::OUT_DIR).map(PathBuf::from),
+            projects,
+            projects_file: non_empty(env::PROJECTS_FILE).map(PathBuf::from),
+            store: non_empty(env::STORE).map(PathBuf::from),
+            no_store: lookup(env::NO_STORE).map(|value| parse_bool(&value)).unwrap_or(false),
+            default_project: non_empty(env::DEFAULT_PROJECT),
+        })
+    }
 }
 
 /// 命令行上的单个项目（`--project NAME=DOC_DIR`）。
@@ -70,6 +96,19 @@ pub struct Args {
 pub struct ProjectArg {
     name: String,
     doc_dir: PathBuf,
+}
+
+/// 解析 `MCP_DOCS_PROJECTS`：分号分隔的 `NAME=DOC_DIR` 列表，空段忽略。
+fn parse_projects(raw: &str) -> anyhow::Result<Vec<ProjectArg>> {
+    let mut projects = Vec::new();
+    for entry in raw.split(';') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        projects.push(parse_project_arg(entry).map_err(anyhow::Error::msg)?);
+    }
+    Ok(projects)
 }
 
 /// 解析 `NAME=DOC_DIR`。
@@ -91,6 +130,16 @@ fn parse_project_arg(value: &str) -> Result<ProjectArg, String> {
         name: name.to_string(),
         doc_dir: PathBuf::from(doc),
     })
+}
+
+/// 解析布尔型环境变量：空串或 `1`/`true`/`yes`/`on`（忽略大小写）视为真。
+fn parse_bool(value: &str) -> bool {
+    let value = value.trim();
+    value.is_empty()
+        || matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
 }
 
 /// `--projects-file` 的 JSON 结构。
@@ -240,24 +289,48 @@ fn default_out(doc_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
 
-    /// `--no-store` 应关闭共享库（E-5.1）。
-    #[test]
-    fn no_store_disables_shared_store() {
-        let args = Args::parse_from(["mcp-docs-server", "--doc-dir", "target/doc", "--no-store"]);
-        let cfg = resolve_config(&args).unwrap();
-        assert!(cfg.store.is_none(), "指定 --no-store 时不应启用共享库");
+    /// 用一组「键 → 值」构造 [`Args`]，模拟环境变量。
+    fn args_from(pairs: &[(&str, &str)]) -> Args {
+        Args::from_lookup(|key| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| (*v).to_string())
+        })
+        .unwrap()
     }
 
-    /// 未指定 `--store` 时默认回落到平台缓存目录（平台无缓存目录时除外）。
+    /// `MCP_DOCS_NO_STORE` 应关闭共享库（E-5.1）。
+    #[test]
+    fn no_store_disables_shared_store() {
+        let args = args_from(&[(env::DOC_DIR, "target/doc"), (env::NO_STORE, "1")]);
+        let cfg = resolve_config(&args).unwrap();
+        assert!(cfg.store.is_none(), "设置 MCP_DOCS_NO_STORE 时不应启用共享库");
+    }
+
+    /// 未设置 `MCP_DOCS_STORE` 时默认回落到平台缓存目录（平台无缓存目录时除外）。
     #[test]
     fn store_defaults_to_platform_cache() {
-        let args = Args::parse_from(["mcp-docs-server", "--doc-dir", "target/doc"]);
+        let args = args_from(&[(env::DOC_DIR, "target/doc")]);
         let cfg = resolve_config(&args).unwrap();
         assert_eq!(
             cfg.store.is_some(),
             mcp_docs_core::default_store_root().is_some()
         );
+    }
+
+    /// `MCP_DOCS_PROJECTS` 应按分号拆出多个项目，缺省项取第一个。
+    #[test]
+    fn projects_env_parses_semicolon_list() {
+        let args = args_from(&[(
+            env::PROJECTS,
+            "core=/repo/a/target/doc; svc=/repo/b/target/doc",
+        )]);
+        let cfg = resolve_config(&args).unwrap();
+        assert_eq!(cfg.projects.len(), 2);
+        assert_eq!(cfg.projects[0].name, "core");
+        assert_eq!(cfg.projects[1].name, "svc");
+        assert_eq!(cfg.default_project, "core");
     }
 }
