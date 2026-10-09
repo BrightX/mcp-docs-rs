@@ -23,7 +23,7 @@ use crate::store::{atomic_write, encode_fs_name};
 use crate::{fnv1a, parse};
 
 /// 共享库条目落盘文件名（JSON + gzip）。
-const ITEMS_FILE_NAME: &str = "items.json.gz.gz";
+const ITEMS_FILE_NAME: &str = "items.json.gz";
 
 /// 一个 crate 的 stat 级指纹：只 stat、不读内容。
 ///
