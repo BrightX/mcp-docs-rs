@@ -411,4 +411,6 @@ pub struct Index {
 ///   改为序列化时省略、加载后由 `id` 重建。
 /// - 9：发现阶段收录 crate 内部重导出别名（crate 首页 `#reexports` 区块），
 ///   别名条目 id 用别名、`html_path` 指向目标真实页。
-pub const INDEX_SCHEMA_VERSION: u32 = 9;
+/// - 10：`#reexports` 进一步收录**跨 crate 模块重导出**（`pub use ::other as x;`），
+///   别名条目 `html_path` 指向目标 crate 首页。
+pub const INDEX_SCHEMA_VERSION: u32 = 10;

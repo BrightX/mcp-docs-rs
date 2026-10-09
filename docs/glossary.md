@@ -52,15 +52,16 @@
 | #2.9 | `rustdoc-vars` | 页面头部 meta，含 `data-current-crate` / `data-rustdoc-version` | `parse.rs::parse_rustdoc_meta` |
 | #2.10 | 宏条目二元组 | rustdoc 1.98+ 在 sidebar 里把宏写成 `[名字, 标志]` | `sidebar.rs::sidebar_entry_name`（见 `lessons.md` #1.24） |
 | #2.11 | 导出粒度、Granularity | 成员是否单独落盘（`member` 默认 / `item` 仅内联） | `model.rs::Granularity`；`index.rs::BuildOptions` |
-| #2.12 | `#reexports`、重导出区块 | crate 首页列出**内部重导出别名**的区块 | `crates/mcp-docs-core/src/reexport.rs::parse_reexports_str` |
-| #2.13 | 别名条目、重导出别名 | crate 内部重导出补出的条目（id 用别名、`html_path` 指向目标页） | `reexport.rs`；`index.rs::process_entry`（`is_alias`） |
+| #2.12 | `#reexports`、重导出区块 | crate 首页列出**重导出别名**的区块（内部重导出 + 跨 crate 模块重导出） | `crates/mcp-docs-core/src/reexport.rs::parse_reexports_str` |
+| #2.13 | 别名条目、重导出别名 | 重导出补出的条目（id 用别名、`html_path` 指向目标页；跨 crate 模块别名指向目标 crate 首页） | `reexport.rs`；`index.rs::process_entry`（`is_alias`） |
+| #2.14 | 跨 crate 模块别名 | `pub use ::other as x;` 补出的模块别名；`get_item` 命中时委托目标 crate 概览 | `project.rs::{cross_crate_module_target, crate_overview}` |
 
 ## 3. 代码位置对照
 
 | 编号 | 术语 / 别名 | 含义 | 代码位置 |
 |---|---|---|---|
 | #3.1 | core 库、核心库 | 纯库，零 async，解析与渲染全部在此 | `crates/mcp-docs-core/src/` |
-| #3.2 | CLI | 命令行导出 / 查询工具 | `crates/mcp-docs-cli/src/main.rs` |
+| #3.2 | CLI | 命令行导出 / 查询工具（`show` 走索引，与 MCP `get_item` 行为一致） | `crates/mcp-docs-cli/src/main.rs` |
 | #3.3 | server、MCP server | rmcp + tokio 的 MCP 服务（stdio） | `crates/mcp-docs-server/src/`（`main.rs` + `server.rs`） |
 | #3.4 | 输出目录、doc-search | 落盘根，默认 `target/doc-search/` | `crates/mcp-docs-core/src/store.rs`；CLI 全局 `--out` |
 | #3.5 | fixture | 实测产物裁剪副本，用于测试 | `crates/mcp-docs-core/tests/fixtures/doc_probe/` |
@@ -97,4 +98,4 @@
 | #3.36 | 启动配置 | 多项目启动配置解析（`MCP_DOCS_PROJECTS` / `MCP_DOCS_PROJECTS_FILE` / `MCP_DOCS_STORE` 等环境变量） | `crates/mcp-docs-server/src/config.rs::resolve_config` |
 | #3.37 | 共享构建锁 | 串行化各项目全量构建，避免并发抢占资源 | `server.rs::from_projects`（`build_lock`）；`project.rs::refresh_index` |
 | #3.38 | 落盘编码 | 索引类文件（`index.json.gz` / `items.json.gz`）落盘为 JSON + gzip；派生字段不落盘、加载后重建 | `crates/mcp-docs-core/src/codec.rs`；`model.rs::ItemSummary::rebuild_derived` |
-| #3.39 | reexport 模块 | 解析 crate 首页 `#reexports`，补出内部重导出别名条目 | `crates/mcp-docs-core/src/reexport.rs`；接入 `discover.rs::discover_crate` |
+| #3.39 | reexport 模块 | 解析 crate 首页 `#reexports`，补出重导出别名条目（内部重导出 + 跨 crate 模块重导出） | `crates/mcp-docs-core/src/reexport.rs`；接入 `discover.rs::discover_crate` |

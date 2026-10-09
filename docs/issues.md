@@ -324,15 +324,15 @@ tools/call search_docs {"query":"Demo"}  → 命中
 
 ### E-3.15 <a id="e-315"></a>`search_items` / `list_items` 命中不到 crate 内部重导出别名
 
-**现象**：crate 内 `pub use deep::RealStruct as RenamedStruct;` 后，`search_items("RenamedStruct")` 与 `list_items(module=…)` 均为空；别名在索引里完全不存在。
+**现象**：crate 内 `pub use deep::RealStruct as RenamedStruct;` 后，`search_items("RenamedStruct")` 与 `list_items(module=…)` 均为空；别名在索引里完全不存在。跨 crate 模块重导出（`pub use ::gpui_component as component;`）同样如此。
 
-**根因**：crate 内部重导出**不生成独立页面**，也不进 `sidebar-items.js` / `all.html` / 目录扫描，只在 crate 首页 `#reexports` 区块列出；发现阶段从不解析该区块，故别名从不进入索引。
+**根因**：这类重导出**不生成独立页面**，也不进 `sidebar-items.js` / `all.html` / 目录扫描，只在 crate 首页 `#reexports` 区块列出；发现阶段从不解析该区块，故别名从不进入索引。
 
-**影响**：Agent 无法按别名检索、无法通过别名获取文档（跨 crate 重导出不受影响，rustdoc 会为其生成本地页面）。
+**影响**：Agent 无法按别名检索、无法通过别名获取文档。跨 crate **条目**重导出不受影响（rustdoc 会为其生成本地页面）。
 
-**修复**：新增 `reexport.rs::parse_reexports_str` 解析 crate 首页 `#reexports`，`discover_crate` 补出别名条目（id 用别名、`html_path` 指向目标真实页）；`index.rs::process_entry` 对别名条目以发现身份为准、不继承成员、不重复写盘。递增 `INDEX_SCHEMA_VERSION` 8→9。
+**修复**：新增 `reexport.rs::parse_reexports_str` 解析 crate 首页 `#reexports`，`discover_crate` 补出别名条目（id 用别名、`html_path` 指向目标真实页）；crate 内部别名指向目标条目页，跨 crate 模块别名指向**目标 crate 首页**。`index.rs::process_entry` 对别名条目以发现身份为准、不继承成员、不重复写盘。`get_item` 命中跨 crate 模块别名时委托目标 crate 的合成概览（`project.rs::cross_crate_module_target`）。`shared.rs::materialize_file` 对缺失源文件跳过（别名无独立 md）。递增 `INDEX_SCHEMA_VERSION` 8→9→10。
 
-**验证**：`tests/discover.rs::discovers_reexport_aliases_from_index`、`tests/search.rs::search_finds_reexport_alias`；实测 `search Renamed` 命中别名、`get_item` 返回目标文档。
+**验证**：`tests/discover.rs::discovers_reexport_aliases_from_index` / `discovers_cross_crate_module_reexport`、`tests/search.rs::search_finds_reexport_alias`、server `get_item_delegates_cross_crate_module_alias`；真实数据实测 `search component --crate gpui_kit` 命中 `gpui_kit::mod.component`。
 
 ## 4. 协议与可移植性
 

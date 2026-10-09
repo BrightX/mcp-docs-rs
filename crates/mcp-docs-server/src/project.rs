@@ -16,10 +16,10 @@ use tokio::sync::{Mutex, watch};
 
 use mcp_docs_core::{
     BuildOptions, DocCache, DocItem, Granularity, INDEX_SCHEMA_VERSION, IdIndex, Index, ItemKind,
-    ItemSummary, ParseOptions, RenderOptions, SearchQuery, build, extract_code_blocks,
-    extract_source_lines, find_trait_impl_paths, is_stale, load_index, module_tree,
-    parse_page_impls, parse_trait_impls, related_items, render_item, render_member_item,
-    rewrite_links, search_page,
+    ItemSummary, ParseOptions, RenderOptions, SearchQuery, build, crate_overview,
+    cross_crate_module_target, extract_code_blocks, extract_source_lines, find_trait_impl_paths,
+    is_stale, kind_serde_name, load_index, module_tree, parse_page_impls, parse_trait_impls,
+    related_items, render_item, render_member_item, rewrite_links, search_page, top_level_modules,
 };
 
 /// `list_items` 的参数。
@@ -792,6 +792,14 @@ impl Project {
                 None => Err(format!("未找到条目 `{}`", params.id)),
             };
         };
+        // 跨 crate 模块重导出别名（`pub use ::gpui_component as component;`）：条目
+        // 指向**另一 crate 的首页**，本身不生成页面。委托该 crate 的合成概览渲染，
+        // 否则会输出一份「无摘要、无文档」的 crate 首页 markdown。
+        if let Some(target) = cross_crate_module_target(summary)
+            && let Some(overview) = crate_overview(&index, target)
+        {
+            return Ok(truncate(overview, params.max_bytes));
+        }
         let item = self.load_item(summary)?;
         let options = RenderOptions::default();
 
@@ -1341,67 +1349,6 @@ fn empty_index(doc_dir: &Path) -> Index {
     }
 }
 
-/// 合成某个 crate 的概览 markdown；`name` 不是已索引 crate 时返回 `None`。
-///
-/// crate 首页（`{crate}/index.html` 的 top-doc）不是 sidebar 条目，故不进入索引，
-/// `get_item(crate 名)` 会直接落空。这里按索引合成一份概览：一级模块 + 一级条目 +
-/// 后续调用指引（见 issues E-3.8）。
-fn crate_overview(index: &Loaded, name: &str) -> Option<String> {
-    let crate_summary = index.crates.iter().find(|crate_| crate_.name == name)?;
-
-    let mut md = String::new();
-    md.push_str(&format!("# {name}\n\n"));
-    md.push_str(&format!(
-        "> crate `{name}` 的概览（crate 首页不是索引条目，这里按索引合成）。共 {} 条目。\n\n",
-        crate_summary.item_count
-    ));
-
-    let modules = top_level_modules(&index.items, name);
-    if !modules.is_empty() {
-        md.push_str("## 模块\n\n");
-        for module in &modules {
-            md.push_str(&format!("- `{name}::{module}`\n"));
-        }
-        md.push('\n');
-    }
-
-    let top: Vec<&ItemSummary> = index
-        .items
-        .iter()
-        .filter(|item| item.id.0.split("::").next() == Some(name))
-        .filter(|item| item.parent_id.is_none() && !item.kind.is_member())
-        .collect();
-    if !top.is_empty() {
-        const MAX_TOP: usize = 200;
-        md.push_str("## 一级条目\n\n");
-        for item in top.iter().take(MAX_TOP) {
-            if item.one_line.is_empty() {
-                md.push_str(&format!("- `{}`（{}）\n", item.id.0, kind_name(item.kind)));
-            } else {
-                md.push_str(&format!(
-                    "- `{}`（{}）：{}\n",
-                    item.id.0,
-                    kind_name(item.kind),
-                    item.one_line
-                ));
-            }
-        }
-        if top.len() > MAX_TOP {
-            md.push_str(&format!(
-                "\n…（另有 {} 个顶层条目，用 `list_items` 分页查看）\n",
-                top.len() - MAX_TOP
-            ));
-        }
-        md.push('\n');
-    }
-
-    md.push_str(&format!(
-        "后续：`list_items(crate=\"{name}\")` 列条目、`module_tree(crate=\"{name}\")` 看模块树、\
-         `search_items(query=\"…\", crate=\"{name}\")` 检索。\n"
-    ));
-    Some(md)
-}
-
 /// 从 trait 页面抽取实现者签名，渲染成 `implementors` / `foreign-impls` 分节正文。
 ///
 /// 这两类结构分节的正文是 impl 列表、不在条目 markdown 里，`body_md` 天然为空
@@ -1439,10 +1386,7 @@ pub(crate) fn summary_json(item: &ItemSummary) -> serde_json::Value {
 
 /// 条目类型的 serde 名（`snake_case`），供结构化输出使用。
 pub(crate) fn kind_name(kind: ItemKind) -> String {
-    serde_json::to_value(kind)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_default()
+    kind_serde_name(kind)
 }
 
 /// 解析 `kind` 参数。
@@ -1521,19 +1465,6 @@ fn module_miss_note(items: &[ItemSummary], crate_name: Option<&str>, module: &st
             modules.join(", ")
         )
     }
-}
-
-/// 某个 crate 的**真实一级模块名**（`ItemKind::Module` 且挂在 crate 根下）。
-///
-/// 注意不能用 `module_tree` 的根子节点：成员条目的 `path` 含其父类型名，会在树里
-/// 生成同名的非模块节点（如 `Demo`），据此提示"可用模块"会误导。
-fn top_level_modules(items: &[ItemSummary], crate_name: &str) -> Vec<String> {
-    items
-        .iter()
-        .filter(|item| item.id.0.split("::").next() == Some(crate_name))
-        .filter(|item| item.kind == ItemKind::Module && item.path.len() == 1)
-        .map(|item| item.name.clone())
-        .collect()
 }
 
 /// ASCII 大小写不敏感的子串匹配（`needle` 需已小写）。

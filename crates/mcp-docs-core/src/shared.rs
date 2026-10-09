@@ -228,8 +228,13 @@ pub fn write_entry(store_root: &Path, plan: &CratePlan, items: &[ItemSummary]) -
 /// 物化单个 markdown：同卷硬链接（Windows 无需提权），跨卷回退复制。
 ///
 /// 覆盖前先删目标（硬链接到已存在文件会失败）；`from == to` 时直接跳过。
+/// 源文件不存在时也跳过：跨 crate 模块重导出别名条目的 `file` 指向目标 crate 首页，
+/// 而 crate 首页不落盘（见 `project.rs::crate_overview`），故该类别名没有对应的 md。
 pub fn materialize_file(from: &Path, to: &Path) -> Result<()> {
     if from == to {
+        return Ok(());
+    }
+    if !from.is_file() {
         return Ok(());
     }
     if let Some(parent) = to.parent() {

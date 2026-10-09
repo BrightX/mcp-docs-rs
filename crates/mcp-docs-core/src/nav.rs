@@ -1,10 +1,10 @@
-//! 导航与关系：模块树、相关条目、trait 实现者解析。
+//! 导航与关系：模块树、相关条目、crate 概览、trait 实现者解析。
 
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::model::{ItemKind, ItemSummary};
+use crate::model::{Index, ItemKind, ItemSummary};
 
 /// 模块树节点（`module_tree` 的返回结构）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -327,6 +327,98 @@ fn decode_entity(entity: &str) -> Option<char> {
     }
 }
 
+/// 若 `item` 是**跨 crate 模块重导出别名**，返回目标 crate 名（`html_path` 首段）。
+///
+/// 判据：`kind == Module` 且条目的 `html_path` 是**另一个 crate 的 `index.html`**
+/// （`html_path` 首段 ≠ 条目所属 crate，即 `id` 首段）。例如
+/// `gpui_kit::mod.component` 的 `html_path = gpui_component/index.html`。
+pub fn cross_crate_module_target(item: &ItemSummary) -> Option<&str> {
+    if item.kind != ItemKind::Module {
+        return None;
+    }
+    let target_crate = item.html_path.split('/').next()?;
+    let own_crate = item.id.0.split("::").next()?;
+    (target_crate != own_crate && item.html_path.ends_with("/index.html")).then_some(target_crate)
+}
+
+/// 合成某个 crate 的概览 markdown；`name` 不是已索引 crate 时返回 `None`。
+///
+/// crate 首页（`{crate}/index.html` 的 top-doc）不是 sidebar 条目，故不进入索引，
+/// `get_item(crate 名)` 会直接落空。这里按索引合成一份概览：一级模块 + 一级条目 +
+/// 后续调用指引（见 issues E-3.8）。MCP `get_item` 与 CLI `show` 共用。
+pub fn crate_overview(index: &Index, name: &str) -> Option<String> {
+    let crate_summary = index.crates.iter().find(|crate_| crate_.name == name)?;
+
+    let mut md = String::new();
+    md.push_str(&format!("# {name}\n\n"));
+    md.push_str(&format!(
+        "> crate `{name}` 的概览（crate 首页不是索引条目，这里按索引合成）。共 {} 条目。\n\n",
+        crate_summary.item_count
+    ));
+
+    let modules = top_level_modules(&index.items, name);
+    if !modules.is_empty() {
+        md.push_str("## 模块\n\n");
+        for module in &modules {
+            md.push_str(&format!("- `{name}::{module}`\n"));
+        }
+        md.push('\n');
+    }
+
+    let top: Vec<&ItemSummary> = index
+        .items
+        .iter()
+        .filter(|item| item.id.0.split("::").next() == Some(name))
+        .filter(|item| item.parent_id.is_none() && !item.kind.is_member())
+        .collect();
+    if !top.is_empty() {
+        const MAX_TOP: usize = 200;
+        md.push_str("## 一级条目\n\n");
+        for item in top.iter().take(MAX_TOP) {
+            let kind = kind_serde_name(item.kind);
+            if item.one_line.is_empty() {
+                md.push_str(&format!("- `{}`（{kind}）\n", item.id.0));
+            } else {
+                md.push_str(&format!("- `{}`（{kind}）：{}\n", item.id.0, item.one_line));
+            }
+        }
+        if top.len() > MAX_TOP {
+            md.push_str(&format!(
+                "\n…（另有 {} 个顶层条目，用 `list_items` 分页查看）\n",
+                top.len() - MAX_TOP
+            ));
+        }
+        md.push('\n');
+    }
+
+    md.push_str(&format!(
+        "后续：`list_items(crate=\"{name}\")` 列条目、`module_tree(crate=\"{name}\")` 看模块树、\
+         `search_items(query=\"…\", crate=\"{name}\")` 检索。\n"
+    ));
+    Some(md)
+}
+
+/// 某个 crate 的**真实一级模块名**（`ItemKind::Module` 且挂在 crate 根下）。
+///
+/// 注意不能用 `module_tree` 的根子节点：成员条目的 `path` 含其父类型名，会在树里
+/// 生成同名的非模块节点（如 `Demo`），据此提示"可用模块"会误导。
+pub fn top_level_modules(items: &[ItemSummary], crate_name: &str) -> Vec<String> {
+    items
+        .iter()
+        .filter(|item| item.id.0.split("::").next() == Some(crate_name))
+        .filter(|item| item.kind == ItemKind::Module && item.path.len() == 1)
+        .map(|item| item.name.clone())
+        .collect()
+}
+
+/// 条目类型的 serde 名（`snake_case`），供概览与结构化输出使用。
+pub fn kind_serde_name(kind: ItemKind) -> String {
+    serde_json::to_value(kind)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,5 +440,92 @@ mod tests {
             "{}",
             impls[0].text
         );
+    }
+
+    /// 跨 crate 模块别名：`html_path` 指向另一 crate 首页时识别出目标 crate。
+    #[test]
+    fn cross_crate_module_target_detects_alias() {
+        let alias = ItemSummary {
+            id: crate::model::ItemId("gpui_kit::mod.component".to_string()),
+            kind: ItemKind::Module,
+            name: "component".to_string(),
+            path: vec!["gpui_kit".to_string()],
+            one_line: String::new(),
+            signature: None,
+            has_docs: false,
+            has_members: false,
+            file: String::new(),
+            html_path: "gpui_component/index.html".to_string(),
+            parent_id: None,
+            src_mtime: None,
+        };
+        assert_eq!(cross_crate_module_target(&alias), Some("gpui_component"));
+
+        // 本 crate 内的普通模块不误判。
+        let own_module = ItemSummary {
+            html_path: "gpui_kit/colors/index.html".to_string(),
+            ..alias.clone()
+        };
+        assert_eq!(cross_crate_module_target(&own_module), None);
+
+        // 非模块条目不参与。
+        let non_module = ItemSummary {
+            kind: ItemKind::Struct,
+            ..alias.clone()
+        };
+        assert_eq!(cross_crate_module_target(&non_module), None);
+    }
+
+    /// crate 概览含模块与一级条目；未知 crate 返回 `None`。
+    #[test]
+    fn crate_overview_lists_modules_and_top_items() {
+        let index = Index {
+            schema_version: 0,
+            rustdoc_version: None,
+            generated_at: 0,
+            target_doc: String::new(),
+            granularity: crate::model::Granularity::default(),
+            crates: vec![crate::model::CrateSummary {
+                name: "k".to_string(),
+                item_count: 2,
+            }],
+            items: vec![
+                ItemSummary {
+                    id: crate::model::ItemId("k::mod.inner".to_string()),
+                    kind: ItemKind::Module,
+                    name: "inner".to_string(),
+                    path: vec!["k".to_string()],
+                    one_line: String::new(),
+                    signature: None,
+                    has_docs: false,
+                    has_members: false,
+                    file: String::new(),
+                    html_path: "k/inner/index.html".to_string(),
+                    parent_id: None,
+                    src_mtime: None,
+                },
+                ItemSummary {
+                    id: crate::model::ItemId("k::struct.Demo".to_string()),
+                    kind: ItemKind::Struct,
+                    name: "Demo".to_string(),
+                    path: vec!["k".to_string()],
+                    one_line: "demo".to_string(),
+                    signature: None,
+                    has_docs: true,
+                    has_members: false,
+                    file: String::new(),
+                    html_path: "k/struct.Demo.html".to_string(),
+                    parent_id: None,
+                    src_mtime: None,
+                },
+            ],
+        };
+        let md = crate_overview(&index, "k").unwrap();
+        assert!(md.starts_with("# k"), "{md}");
+        assert!(md.contains("## 模块"), "{md}");
+        assert!(md.contains("- `k::inner`"), "{md}");
+        assert!(md.contains("## 一级条目"), "{md}");
+        assert!(md.contains("- `k::struct.Demo`（struct）：demo"), "{md}");
+        assert!(crate_overview(&index, "nope").is_none());
     }
 }

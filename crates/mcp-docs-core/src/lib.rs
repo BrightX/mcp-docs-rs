@@ -39,8 +39,9 @@ pub use model::{
     ItemKind, ItemSummary, Section, SourceRef,
 };
 pub use nav::{
-    ModuleNode, RelatedItems, TraitImpl, find_trait_impl_paths, module_tree, parse_trait_impls,
-    related_items, trait_impl_rel_path,
+    ModuleNode, RelatedItems, TraitImpl, crate_overview, cross_crate_module_target,
+    find_trait_impl_paths, kind_serde_name, module_tree, parse_trait_impls, related_items,
+    top_level_modules, trait_impl_rel_path,
 };
 pub use parse::{
     ParseOptions, extract_source_lines, parse_crate_version, parse_item_html, parse_one_line,

@@ -1,12 +1,19 @@
-//! 解析 crate 首页的 `#reexports` 区块（crate 内部重导出别名）。
+//! 解析 crate 首页的 `#reexports` 区块（重导出别名）。
 //!
-//! rustdoc 对**本 crate 内**的重导出（`pub use deep::RealStruct as Renamed;`）
-//! 不生成独立页面，只在 crate 首页列出一个 `Re-exports` 区块；这类别名因此
-//! 无法由 `sidebar-items.js` / `all.html` / 目录扫描发现（见 `docs/lessons.md`）。
-//! 本模块把它们补成别名条目：`id` 用别名，`html_path` 指向目标的真实页面，
-//! 从而让 `search_items` 能命中别名、`get_item` 能返回目标文档。
+//! rustdoc 对以下两类重导出**不生成独立页面**，只在 crate 首页列出一个
+//! `Re-exports` 区块；它们因此无法由 `sidebar-items.js` / `all.html` / 目录扫描发现
+//! （见 `docs/lessons.md` #1.31）：
 //!
-//! **跨 crate 重导出**（`pub use anyhow::Error;`）rustdoc 会生成本地页面，
+//! - **crate 内部重导出**（`pub use deep::RealStruct as Renamed;`）：目标在本 crate 内，
+//!   `href` 形如 `deep/struct.RealStruct.html`；
+//! - **跨 crate 模块重导出**（`pub use ::gpui_component as component;`）：目标为另一个
+//!   crate 的根模块，`href` 形如 `../gpui_component/index.html`（目标 crate 首页）。
+//!
+//! 本模块把它们补成别名条目：`id` 用别名、`html_path` 指向目标页面，从而让
+//! `search_items` 能命中别名。跨 crate 模块别名的 `html_path` 指向**另一 crate 的
+//! 首页**，其正文由 server 层委托目标 crate 概览渲染（见 `project.rs`）。
+//!
+//! **跨 crate 条目重导出**（`pub use anyhow::Error;`）则不同：rustdoc 会生成本地页面，
 //! 已由常规发现路径覆盖，且不进入 `#reexports`，故此处天然不涉及。
 
 use std::collections::HashSet;
@@ -28,7 +35,7 @@ macro_rules! selector {
 /// 解析 crate 首页 HTML 的 `#reexports` 区块，返回别名条目。
 ///
 /// `crate_name` 为该页所属 crate（即 `index.html` 所在目录名）。
-/// 无法解析或目标不在本 crate 的别名会被忽略。
+/// 无法解析、或目标既不在本 crate 内也不是另一 crate 首页的别名会被忽略。
 pub fn parse_reexports_str(html: &str, crate_name: &str) -> Vec<DiscoveredItem> {
     let document = Html::parse_document(html);
     let mut out = Vec::new();
@@ -57,10 +64,6 @@ pub fn parse_reexports_str(html: &str, crate_name: &str) -> Vec<DiscoveredItem> 
         let Some(kind) = target_kind(title) else {
             continue;
         };
-        // 只收本 crate 的目标：跨 crate 的目标不进入 `#reexports`，若出现则跳过。
-        if rel.components().next().map(|c| c.as_os_str()) != Some(crate_name.as_ref()) {
-            continue;
-        }
 
         out.push(DiscoveredItem {
             id: ItemId(format!("{crate_name}::{}.{alias}", kind.kind_tag())),
@@ -88,18 +91,31 @@ pub(crate) fn target_kind(title: &str) -> Option<ItemKind> {
 
 /// 把 `#reexports` 里的 `href` 规整为相对 `doc_root` 的路径；不可用返回 `None`。
 ///
-/// 只接受指向本 crate 内 `.html` 页面的相对链接：丢弃页内锚点、外链、绝对路径、
-/// 逃出 crate 的 `..`。
+/// 接受两种形态（见模块文档）：
+/// - 本 crate 内：`deep/struct.RealStruct.html` → `{crate}/deep/struct.RealStruct.html`；
+/// - 跨 crate 模块：`../gpui_component/index.html` → `gpui_component/index.html`。
+///
+/// 丢弃页内锚点、外链、绝对路径，以及不指向 `.html` 的链接。
 fn href_to_rel(href: &str, crate_name: &str) -> Option<PathBuf> {
     let href = href.split('#').next().unwrap_or("");
-    if href.is_empty() || href.starts_with('/') || href.starts_with("..") || href.contains("://") {
+    if href.is_empty() || href.starts_with('/') || href.contains("://") {
         return None;
+    }
+    // 跨 crate 目标：`../{other}/index.html` 指另一 crate 的根模块（首页）。
+    // doc_root 是各 crate 目录的公共父级，故多个 `../` 归一化后即为相对 doc_root。
+    if let Some(rest) = href.strip_prefix("../") {
+        let rest = rest.trim_start_matches("../");
+        // 仅接受「另一 crate 的 index.html」，其余跨 crate 目标不在此处理。
+        let stem = rest.strip_suffix(".html")?;
+        if !stem.ends_with("/index") {
+            return None;
+        }
+        return Some(PathBuf::from(format!("{stem}.html")));
     }
     let stem = href.strip_suffix(".html")?;
     // 模块目录链接 `deep/index.html` 指向模块页；`strip_suffix` 后为 `deep/index`，
     // 这里统一规整为 `deep/index.html`（保留 `index`，与 discover 的模块路径一致）。
-    let rel = Path::new(crate_name).join(format!("{stem}.html"));
-    Some(rel)
+    Some(Path::new(crate_name).join(format!("{stem}.html")))
 }
 
 #[cfg(test)]
@@ -153,5 +169,29 @@ mod tests {
         assert_eq!(target_kind("type rp::A"), Some(ItemKind::TypeAlias));
         assert_eq!(target_kind("mod rp::m"), Some(ItemKind::Module));
         assert_eq!(target_kind(""), None);
+    }
+
+    /// 跨 crate 模块重导出（`pub use ::other as x;`）也产出别名条目，
+    /// 且 `html_path` 指向目标 crate 的首页（相对 doc_root）。
+    #[test]
+    fn parse_reexports_handles_cross_crate_module() {
+        let html = r##"<html><body><section id="main-content">
+<h2 id="reexports" class="section-header">Re-exports</h2>
+<dl class="item-table reexports">
+<dt id="reexport.component"><code>pub use ::<a class="mod" href="../gpui_component/index.html" title="mod gpui_component">gpui_component</a> as component;</code></dt>
+<dt id="reexport.platform"><code>pub use ::<a class="mod" href="../gpui_platform/index.html" title="mod gpui_platform">gpui_platform</a> as platform;</code></dt>
+<dt id="reexport.Bad"><code>pub use ::<a class="struct" href="../other/struct.Foo.html" title="struct other::Foo">Foo</a> as Bad;</code></dt>
+</dl></section></body></html>"##;
+        let items = parse_reexports_str(html, "gpui_kit");
+        // 仅接受「另一 crate 的 index.html」；跨 crate 条目页（struct.Foo.html）跳过。
+        let ids: Vec<&str> = items.iter().map(|item| item.id.0.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["gpui_kit::mod.component", "gpui_kit::mod.platform"]
+        );
+        assert_eq!(items[0].kind, ItemKind::Module);
+        assert_eq!(items[0].name, "component");
+        assert_eq!(items[0].path, vec!["gpui_kit".to_string()]);
+        assert_eq!(items[0].html_path, Path::new("gpui_component/index.html"));
     }
 }

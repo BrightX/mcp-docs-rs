@@ -31,9 +31,9 @@ target/doc/
 - 条目文件前缀：`struct.` / `enum.` / `trait.` / `fn.` / `type.` / `constant.` / `macro.` / `static.` / `union.` / `primitive.`。
 - `all.html`：`<ul class="all-items"><li><a href="struct.Demo.html">Demo</a></li>`，跨模块显示为 `inner::Nested`。
 
-### re-export 的两种形态（实测）
+### re-export 的三种形态（实测）
 
-重导出分两类，产物形态**完全不同**：
+重导出分三类，产物形态**完全不同**：
 
 - **crate 内部重导出**（`pub use deep::RealStruct as Renamed;`）：**不生成独立页面**，也不进 `sidebar-items.js` / `all.html` / 目录扫描；只在 crate 首页列出：
   ```html
@@ -44,7 +44,13 @@ target/doc/
   </dl>
   ```
   `dt#reexport.{别名}` 给别名，`a[title]`（`{kind前缀} {目标全路径}`）给目标类型，`a[href]` 给目标真实页。由 `reexport.rs` 补成别名条目（id 用别名、`html_path` 指向目标页），供 `search_items` 命中。
-- **跨 crate 重导出**（`pub use anyhow::Error;`）：rustdoc 生成**本地页面**（`struct.Error.html` 等），进 sidebar / `all.html`，由常规发现路径覆盖，**不进入 `#reexports`**。
+- **跨 crate 模块重导出**（`pub use ::gpui_component as component;`）：目标为**另一 crate 的根模块**，同样**不生成独立页面**、只在 `#reexports` 列出，但 `a[href]` 是 `../{other}/index.html`（目标 crate 首页）：
+  ```html
+  <dt id="reexport.component"><code>pub use ::<a class="mod"
+     href="../gpui_component/index.html" title="mod gpui_component">gpui_component</a> as component;</code></dt>
+  ```
+  同样由 `reexport.rs` 补成别名条目（id 用别名、`html_path` 指向**目标 crate 首页**）。因 crate 首页不是索引条目、不落盘，`get_item` 命中该别名时**委托目标 crate 的合成概览**渲染（`project.rs::cross_crate_module_target` + `crate_overview`）。
+- **跨 crate 条目重导出**（`pub use anyhow::Error;`）：rustdoc 生成**本地页面**（`struct.Error.html` 等），进 sidebar / `all.html`，由常规发现路径覆盖，**不进入 `#reexports`**。
 
 ### 页面层（位于 `section#main-content.content` 内）
 
@@ -396,9 +402,11 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 ```
 mcp-docs export [--out DIR] [--doc-dir target/doc] [--incremental] [--granularity member|item]  # 导出 md + index.json.gz
 mcp-docs tree   [--doc-dir target/doc]                               # 打印条目树（调试）
-mcp-docs show   <id> [--doc-dir target/doc]                          # 打印单条目 markdown
+mcp-docs show   <id> [--out DIR] [--doc-dir target/doc]              # 打印单条目摘要（走索引）
 mcp-docs search <query> [--crate X] [--limit N] [--offset N]         # 检索（可分页）
 ```
+
+`show` 与 MCP `get_item` **行为一致**（输出为结构化摘要，非整篇 markdown）：id 走索引查找、可省略类型标记（`show tokio::spawn`）；命中**跨 crate 模块重导出别名**（如 `gpui_kit::component`）时委托目标 crate 的合成概览；id 恰为已索引 crate 名时同样回退该概览。因此 `show` 依赖 `index.json.gz`，需先 `export`。
 
 全局参数新增 `--store DIR`（env `MCP_DOCS_STORE`），指向跨项目共享索引库；缺省用平台缓存目录。`export` 的输出会打印「共享库命中 / 写入」计数。
 

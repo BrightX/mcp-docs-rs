@@ -201,11 +201,11 @@
 **对**：markdown 标题保留内联代码的反引号（`## When to use \`X\``），而 HTML 标题文本没有；精确比对会切不到正文，`body_md` 静默为空（同页其它无内联代码的分节却正常）。比对前应规整（去反引号）。
 **相关**：`parse.rs::extract_md_section`；issues E-1.3
 
-### #1.31 重导出有两种形态，只有「内部重导出」需要额外发现
+### #1.31 重导出有三种形态，只有前两种需要额外发现
 
 **错**：以为 `pub use` 重导出要么都有独立页面、要么都是 `#reexports` 文字。
-**对**：**crate 内部**重导出（`pub use deep::X as Y;`）**不生成页面**，也不进 `sidebar-items.js` / `all.html` / 目录扫描，只在 crate 首页 `#reexports` 区块列出（`dt#reexport.{别名}` + `a[href]`/`a[title]`），必须单独解析才能被检索；**跨 crate** 重导出（`pub use anyhow::Error;`）rustdoc 会生成本地页面、进 sidebar / `all.html`，常规发现已覆盖。只补前者即可。
-**相关**：`crates/mcp-docs-core/src/reexport.rs`；`discover.rs::discover_crate`；design.md §1
+**对**：分三种——① **crate 内部**重导出（`pub use deep::X as Y;`）**不生成页面**，只在 crate 首页 `#reexports` 列出（`href` 形如 `deep/struct.X.html`）；② **跨 crate 模块**重导出（`pub use ::gpui_component as component;`）同样不生成页面、只在 `#reexports` 列出，但 `href` 形如 `../gpui_component/index.html`（目标 crate 首页）；③ **跨 crate 条目**重导出（`pub use anyhow::Error;`）rustdoc 会生成本地页面、进 sidebar / `all.html`，常规发现已覆盖。①② 都必须单独解析 `#reexports` 才能被检索；③ 无需处理。跨 crate 模块别名指向的 crate 首页不是索引条目、不落盘，`get_item` 需委托目标 crate 概览渲染。
+**相关**：`crates/mcp-docs-core/src/reexport.rs`；`crates/mcp-docs-server/src/project.rs::cross_crate_module_target`；design.md §1
 
 ### #1.32 共享同一 HTML 的条目，id 不能只从 html_path 推导
 

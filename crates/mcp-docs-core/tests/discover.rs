@@ -111,6 +111,47 @@ fn all_html_supplements_missing_submodule() {
     );
 }
 
+/// 跨 crate 模块重导出（`pub use ::other as x;`）被发现为别名条目，
+/// 且 `html_path` 指向目标 crate 首页。
+#[test]
+fn discovers_cross_crate_module_reexport() {
+    let tmp = tempfile::tempdir().unwrap();
+    let doc_root = tmp.path();
+    // 目标 crate：另一个独立 crate 的首页，必须真实存在（发现阶段会校验）。
+    let target = doc_root.join("gpui_component");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("index.html"), "<html></html>").unwrap();
+    fs::write(
+        target.join("sidebar-items.js"),
+        r#"window.SIDEBAR_ITEMS = {};"#,
+    )
+    .unwrap();
+
+    // 源 crate：首页 `#reexports` 里跨 crate 模块重导出。
+    let krate = doc_root.join("gpui_kit");
+    fs::create_dir_all(&krate).unwrap();
+    fs::write(
+        krate.join("sidebar-items.js"),
+        r#"window.SIDEBAR_ITEMS = {};"#,
+    )
+    .unwrap();
+    fs::write(
+        krate.join("index.html"),
+        r##"<section id="main-content"><h2 id="reexports" class="section-header">Re-exports</h2>
+<dl class="item-table reexports"><dt id="reexport.component"><code>pub use ::<a class="mod" href="../gpui_component/index.html" title="mod gpui_component">gpui_component</a> as component;</code></dt></dl></section>"##,
+    )
+    .unwrap();
+
+    let items = discover_crate(doc_root, "gpui_kit").unwrap();
+    let alias = items
+        .iter()
+        .find(|item| item.id.0 == "gpui_kit::mod.component")
+        .expect("应发现跨 crate 模块别名 gpui_kit::mod.component");
+    assert_eq!(alias.kind, ItemKind::Module);
+    assert_eq!(alias.name, "component");
+    assert_eq!(alias.html_path, PathBuf::from("gpui_component/index.html"));
+}
+
 #[test]
 fn ignores_unknown_sidebar_keys() {
     let js = r#"window.SIDEBAR_ITEMS = {"struct":["Demo"],"whatever":["x"]};"#;

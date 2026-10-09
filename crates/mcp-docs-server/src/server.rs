@@ -778,6 +778,77 @@ mod tests {
         assert!(default_project(&server).is_ready(), "已有索引时应立即就绪");
     }
 
+    /// `get_item` 命中跨 crate 模块重导出别名时，委托目标 crate 的合成概览。
+    #[tokio::test]
+    async fn get_item_delegates_cross_crate_module_alias() {
+        let doc = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let doc_root = doc.path();
+
+        // 两个 crate：`gpui_kit` 把 `gpui_component` 作为模块重导出。
+        fs::write(
+            doc_root.join("crates.js"),
+            r#"window.ALL_CRATES = ["gpui_component","gpui_kit"];"#,
+        )
+        .unwrap();
+        let target = doc_root.join("gpui_component");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(
+            target.join("sidebar-items.js"),
+            r#"window.SIDEBAR_ITEMS = {"struct":["Button"]};"#,
+        )
+        .unwrap();
+        fs::write(
+            target.join("struct.Button.html"),
+            "<html><section id=\"main-content\"></section></html>",
+        )
+        .unwrap();
+        // crate 首页必须存在：跨 crate 模块别名指向它，发现阶段会校验。
+        fs::write(
+            target.join("index.html"),
+            "<html><section id=\"main-content\"></section></html>",
+        )
+        .unwrap();
+        let krate = doc_root.join("gpui_kit");
+        fs::create_dir_all(&krate).unwrap();
+        fs::write(
+            krate.join("sidebar-items.js"),
+            r#"window.SIDEBAR_ITEMS = {};"#,
+        )
+        .unwrap();
+        fs::write(
+            krate.join("index.html"),
+            r##"<section id="main-content"><h2 id="reexports" class="section-header">Re-exports</h2>
+<dl class="item-table reexports"><dt id="reexport.component"><code>pub use ::<a class="mod" href="../gpui_component/index.html" title="mod gpui_component">gpui_component</a> as component;</code></dt></dl></section>"##,
+        )
+        .unwrap();
+
+        // 先物化索引，再启动服务。
+        build(
+            doc_root,
+            out.path(),
+            &BuildOptions {
+                persist: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let server = single_project(doc_root.to_path_buf(), out.path().to_path_buf());
+        let project = default_project(&server);
+        project.ensure_ready().await;
+
+        let md = project
+            .get_item_blocking(crate::project::ItemParams {
+                id: "gpui_kit::component".to_string(),
+                max_bytes: None,
+                project: None,
+            })
+            .unwrap();
+        // 返回的是 gpui_component 的合成概览（而非 gpui_kit 的条目）。
+        assert!(md.contains("crate `gpui_component`"), "{md}");
+        assert!(md.contains("gpui_component::struct.Button"), "{md}");
+    }
+
     /// 构造一个最小条目摘要，用于纯函数测试。
     fn summary(path: &[&str]) -> mcp_docs_core::ItemSummary {
         mcp_docs_core::ItemSummary {

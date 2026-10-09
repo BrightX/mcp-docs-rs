@@ -117,7 +117,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
 
     match &cli.command {
         Command::Tree => print_tree(&cli.doc_dir),
-        Command::Show { id } => show(&cli.doc_dir, id),
+        Command::Show { id } => show(&cli.doc_dir, &cli.out, id),
         Command::Export {
             crate_name,
             incremental,
@@ -167,40 +167,78 @@ fn print_tree(doc_dir: &Path) -> anyhow::Result<()> {
 }
 
 /// 解析并打印单个条目。
-fn show(doc_dir: &Path, id: &str) -> anyhow::Result<()> {
-    let items = mcp_docs_core::discover_all(doc_dir)?;
-    let discovered = items
-        .iter()
-        .find(|item| item.id.0 == id)
-        .ok_or_else(|| anyhow::anyhow!("未找到条目 `{id}`"))?;
+///
+/// 走索引（`out_dir/index.json.gz`），与 MCP `get_item` 行为一致：id 可省略类型标记；
+/// 命中跨 crate 模块重导出别名时委托目标 crate 的合成概览。
+fn show(doc_dir: &Path, out_dir: &Path, id: &str) -> anyhow::Result<()> {
+    let index_path = out_dir.join(mcp_docs_core::INDEX_FILE_NAME);
+    let index = mcp_docs_core::load_index(&index_path).with_context(|| {
+        format!(
+            "读取索引失败：{}；请先运行 `mcp-docs export` 生成索引",
+            index_path.display()
+        )
+    })?;
+    print!("{}", render_show(&index, doc_dir, id)?);
+    Ok(())
+}
 
-    let html_path = doc_dir.join(&discovered.html_path);
+/// 渲染 `show` 的输出文本（可测的纯逻辑）。
+///
+/// 顺序与 MCP `get_item` 一致：① 命中跨 crate 模块别名 → 委托目标 crate 概览；
+/// ② 未命中但 id 是已索引 crate 名 → 合成概览；③ 命中普通条目 → 结构化摘要。
+fn render_show(index: &mcp_docs_core::Index, doc_dir: &Path, id: &str) -> anyhow::Result<String> {
+    let ids = mcp_docs_core::IdIndex::build(&index.items);
+    let summary = ids.find(id).map(|pos| &index.items[pos]);
+
+    let Some(summary) = summary else {
+        // 与 MCP `get_item` 一致：id 恰为已索引 crate 名时回退合成概览（crate 首页不入索引）。
+        if let Some(overview) = mcp_docs_core::crate_overview(index, id) {
+            return Ok(format!("{overview}\n"));
+        }
+        anyhow::bail!("未找到条目 `{id}`");
+    };
+
+    // 跨 crate 模块重导出别名：委托目标 crate 的合成概览（与 MCP `get_item` 一致）。
+    if let Some(target) = mcp_docs_core::cross_crate_module_target(summary)
+        && let Some(overview) = mcp_docs_core::crate_overview(index, target)
+    {
+        return Ok(format!("{overview}\n"));
+    }
+
+    let html_path = doc_dir.join(&summary.html_path);
     let html = std::fs::read_to_string(&html_path)
         .with_context(|| format!("读取 {} 失败", html_path.display()))?;
-    let item = mcp_docs_core::parse_item_html(&html, &discovered.html_path, &Default::default())?;
+    let item =
+        mcp_docs_core::parse_item_html(&html, Path::new(&summary.html_path), &Default::default())?;
 
-    println!("{}  [{}]", item.id, item.kind.file_prefix());
-
+    let mut out = format!("{}  [{}]\n", item.id, item.kind.file_prefix());
     if let Some(signature) = &item.signature {
-        println!("\n--- 签名 ---\n{signature}");
+        out.push_str(&format!("\n--- 签名 ---\n{signature}\n"));
     }
     if let Some(docs) = &item.docs_md {
-        println!("\n--- 文档 ---\n{docs}");
+        out.push_str(&format!("\n--- 文档 ---\n{docs}\n"));
     }
     if !item.sections.is_empty() {
         let titles: Vec<&str> = item.sections.iter().map(|s| s.title.as_str()).collect();
-        println!("\n--- 分节 ---\n{}", titles.join(" / "));
+        out.push_str(&format!("\n--- 分节 ---\n{}\n", titles.join(" / ")));
     }
     if !item.members.is_empty() {
-        println!("\n--- 成员（{}）---", item.members.len());
+        out.push_str(&format!("\n--- 成员（{}）---\n", item.members.len()));
         for member in &item.members {
-            println!("{:<12} {}", member.kind.file_prefix(), member.id);
+            out.push_str(&format!(
+                "{:<12} {}\n",
+                member.kind.file_prefix(),
+                member.id
+            ));
             if let Some(docs) = &member.docs_md {
-                println!("             {}", docs.lines().next().unwrap_or(""));
+                out.push_str(&format!(
+                    "             {}\n",
+                    docs.lines().next().unwrap_or("")
+                ));
             }
         }
     }
-    Ok(())
+    Ok(out)
 }
 
 /// 导出 markdown 文件树，并生成 `index.json.gz` 与 `meta.json`。
@@ -298,4 +336,99 @@ fn run_search(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mcp_docs_core::{CrateSummary, Granularity, Index, ItemId, ItemKind, ItemSummary};
+
+    /// 构造一个最小条目摘要。
+    fn summary(
+        id: &str,
+        kind: ItemKind,
+        name: &str,
+        path: &[&str],
+        html_path: &str,
+    ) -> ItemSummary {
+        ItemSummary {
+            id: ItemId(id.to_string()),
+            kind,
+            name: name.to_string(),
+            path: path.iter().map(|s| (*s).to_string()).collect(),
+            one_line: String::new(),
+            signature: None,
+            has_docs: false,
+            has_members: false,
+            file: String::new(),
+            html_path: html_path.to_string(),
+            parent_id: None,
+            src_mtime: None,
+        }
+    }
+
+    /// fixture：`gpui_kit` 把 `gpui_component` 作为模块重导出，且 `gpui_component` 已索引。
+    fn index_with_cross_crate_alias() -> Index {
+        Index {
+            schema_version: 0,
+            rustdoc_version: None,
+            generated_at: 0,
+            target_doc: String::new(),
+            granularity: Granularity::default(),
+            crates: vec![
+                CrateSummary {
+                    name: "gpui_component".to_string(),
+                    item_count: 1,
+                },
+                CrateSummary {
+                    name: "gpui_kit".to_string(),
+                    item_count: 1,
+                },
+            ],
+            items: vec![
+                summary(
+                    "gpui_kit::mod.component",
+                    ItemKind::Module,
+                    "component",
+                    &["gpui_kit"],
+                    "gpui_component/index.html",
+                ),
+                summary(
+                    "gpui_component::button::struct.Button",
+                    ItemKind::Struct,
+                    "Button",
+                    &["gpui_component", "button"],
+                    "gpui_component/button/struct.Button.html",
+                ),
+            ],
+        }
+    }
+
+    /// 跨 crate 模块别名：省略与带类型标记两种写法都委托目标 crate 概览。
+    #[test]
+    fn render_show_delegates_cross_crate_module_alias() {
+        let index = index_with_cross_crate_alias();
+        let doc = Path::new("/nonexistent");
+        for id in ["gpui_kit::component", "gpui_kit::mod.component"] {
+            let out = render_show(&index, doc, id).unwrap();
+            assert!(out.starts_with("# gpui_component"), "id={id}: {out}");
+            assert!(out.contains("共 1 条目"), "id={id}: {out}");
+        }
+    }
+
+    /// 已索引的 crate 名（crate 首页不入索引）回退合成概览。
+    #[test]
+    fn render_show_falls_back_to_crate_overview() {
+        let index = index_with_cross_crate_alias();
+        let out = render_show(&index, Path::new("/nonexistent"), "gpui_component").unwrap();
+        assert!(out.starts_with("# gpui_component"), "{out}");
+    }
+
+    /// 完全不存在且非 crate 名的 id 报未找到。
+    #[test]
+    fn render_show_errors_on_unknown_id() {
+        let index = index_with_cross_crate_alias();
+        let err = render_show(&index, Path::new("/nonexistent"), "gpui_kit::Nope").unwrap_err();
+        assert!(err.to_string().contains("未找到条目"), "{err}");
+    }
 }
