@@ -84,6 +84,43 @@ MCP_DOCS_PROJECTS="core=/repo/a/target/doc;svc=/repo/b/target/doc" \
   cargo run -p mcp-docs-server
 ```
 
+在 MCP 客户端中注册（`mcp.json` / `claude_desktop_config.json` 等）：参数全部放进 `env`，`command` 指向构建好的二进制（`target/release/mcp-docs-server`）。
+
+单项目：
+
+```json
+{
+  "mcpServers": {
+    "mcp-docs": {
+      "command": "/abs/path/to/mcp-docs-server",
+      "env": {
+        "MCP_DOCS_DIR": "/repo/target/doc",
+        "MCP_DOCS_OUT": "/repo/target/doc-search"
+      }
+    }
+  }
+}
+```
+
+多项目：
+
+```json
+{
+  "mcpServers": {
+    "mcp-docs": {
+      "command": "/abs/path/to/mcp-docs-server",
+      "env": {
+        "MCP_DOCS_PROJECTS": "core=/repo/a/target/doc;svc=/repo/b/target/doc",
+        "MCP_DOCS_STORE": "/home/me/.cache/mcp-docs",
+        "MCP_DOCS_DEFAULT_PROJECT": "core"
+      }
+    }
+  }
+}
+```
+
+未安装二进制时可用 `"command": "cargo", "args": ["run", "-p", "mcp-docs-server"]` 直接运行（每次启动会重新编译，较慢）。
+
 环境变量：
 
 | 变量 | 含义 |

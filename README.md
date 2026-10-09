@@ -84,6 +84,43 @@ MCP_DOCS_PROJECTS="core=/repo/a/target/doc;svc=/repo/b/target/doc" \
   cargo run -p mcp-docs-server
 ```
 
+Register with an MCP client (`mcp.json` / `claude_desktop_config.json`, etc.): put all parameters in `env`, with `command` pointing at the built binary (`target/release/mcp-docs-server`).
+
+Single project:
+
+```json
+{
+  "mcpServers": {
+    "mcp-docs": {
+      "command": "/abs/path/to/mcp-docs-server",
+      "env": {
+        "MCP_DOCS_DIR": "/repo/target/doc",
+        "MCP_DOCS_OUT": "/repo/target/doc-search"
+      }
+    }
+  }
+}
+```
+
+Multiple projects:
+
+```json
+{
+  "mcpServers": {
+    "mcp-docs": {
+      "command": "/abs/path/to/mcp-docs-server",
+      "env": {
+        "MCP_DOCS_PROJECTS": "core=/repo/a/target/doc;svc=/repo/b/target/doc",
+        "MCP_DOCS_STORE": "/home/me/.cache/mcp-docs",
+        "MCP_DOCS_DEFAULT_PROJECT": "core"
+      }
+    }
+  }
+}
+```
+
+Without an installed binary, run directly via `"command": "cargo", "args": ["run", "-p", "mcp-docs-server"]` (recompiles on each start, slower).
+
 Environment variables:
 
 | Variable | Meaning |
