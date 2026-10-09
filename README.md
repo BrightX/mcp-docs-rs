@@ -12,7 +12,7 @@ The HTML produced by `cargo doc` is a poor fit for agents to read directly: it m
 - **Parses rustdoc HTML directly**: uses `scraper` (html5ever) to parse `cargo doc` output — **no rustdoc JSON** (still unstable), no nightly or `RUSTC_BOOTSTRAP` required; relies only on long-term stable structural invariants, so it is robust across rustdoc versions.
 - **Local-only, offline**: the data source is only the local `target/doc`; never touches docs.rs.
 - **Per-item splitting**: every struct / trait / fn / method / variant / field is its own item; members are both written to disk individually and inlined into the parent item.
-- **Two-tier output**: `index.json` (lightweight summaries, the first thing an agent reads) + per-item markdown bodies on disk.
+- **Two-tier output**: `index.json.gz` (lightweight summaries, the first thing an agent reads) + per-item markdown bodies on disk.
 - **Denoising**: strips UI noise (`copy-path`, sidebar, anchors) and `blanket` / `synthetic` impl blocks; wraps code blocks in ```rust fences; `htmd` handles HTML→Markdown.
 - **Searchable**: substring / prefix / fuzzy matching over name / path / summary, multi-word AND, filtering by crate and kind, with relevance scoring.
 - **Incremental & cached**: rebuilds only what changed based on an artifact fingerprint and file mtimes; bodies are parsed on demand with an LRU cache.
@@ -38,7 +38,7 @@ The HTML produced by `cargo doc` is a poor fit for agents to read directly: it m
 
 ### 3. Index & search
 
-- **Flat `index.json`**: each item's id / kind / path / one-line summary / file location / source location — the first thing an agent reads.
+- **Flat `index.json.gz`**: each item's id / kind / path / one-line summary / file location / source location — the first thing an agent reads.
 - **Match modes**: substring, prefix, fuzzy (subsequence); supports **multi-word AND** (summing per-word scores).
 - **Filtering & ranking**: filter by crate and kind; ranking scores exact name > prefix > path hit > summary hit, and summary hits carry a snippet.
 - **Pagination**: `limit` / `offset`, returning the pre-pagination `total`.
@@ -47,7 +47,7 @@ The HTML produced by `cargo doc` is a poor fit for agents to read directly: it m
 
 - **Fingerprint check**: `file_count` / `max_mtime` / `size_sum` / `crates.js` hash + rustdoc version + schema version — any change triggers a rebuild.
 - **Incremental export**: `--incremental` compares per file by `src_mtime` and rebuilds only what changed.
-- **Two-tier cache**: loads an existing `index.json` in milliseconds at startup; parses bodies only on `get_item`, using `Arc<DocItem>` + LRU (512 by default).
+- **Two-tier cache**: loads an existing `index.json.gz` in milliseconds at startup; parses bodies only on `get_item`, using `Arc<DocItem>` + LRU (512 by default).
 - **Parallel builds**: `rayon` parallelizes parsing and writing; CPU-heavy tasks run in `spawn_blocking` so the async executor is never blocked.
 
 ### 5. Multi-project & cross-project shared index store
@@ -61,10 +61,34 @@ The HTML produced by `cargo doc` is a poor fit for agents to read directly: it m
 |---|---|
 | `mcp-docs tree` | Print the item tree (debugging) |
 | `mcp-docs show <id>` | Parse and print a single item |
-| `mcp-docs export [--incremental] [--crate NAME] [--granularity member\|item]` | Export markdown + `index.json` + `meta.json` |
+| `mcp-docs export [--incremental] [--crate NAME] [--granularity member\|item]` | Export markdown + `index.json.gz` + `meta.json` |
 | `mcp-docs search <query> [--limit] [--offset] [--mode] [--crate] [--kind]` | Search items |
 
 Global options: `--doc-dir` (default `target/doc`), `--out` (default `target/doc-search`), `--store` (shared index store, default platform cache directory).
+
+Examples (inside the repo use `cargo run -p mcp-docs-cli --`; after install, just `mcp-docs`):
+
+```bash
+# Export: read target/doc → write target/doc-search
+cargo run -p mcp-docs-cli -- export
+
+# Incremental export; a single crate; per-member files
+cargo run -p mcp-docs-cli -- export --incremental --crate tokio --granularity member
+
+# Search: restrict crate / kind, prefix mode, pagination
+cargo run -p mcp-docs-cli -- search "spawn" --crate tokio --limit 5
+cargo run -p mcp-docs-cli -- search "Timeout" --kind struct --mode prefix --offset 20
+
+# Print a single item / the item tree (debugging)
+cargo run -p mcp-docs-cli -- show tokio::task::spawn
+cargo run -p mcp-docs-cli -- tree
+
+# Custom doc dir & shared store (global options may follow the subcommand)
+cargo run -p mcp-docs-cli -- export \
+  --doc-dir /repo/target/doc --out /repo/target/doc-search --store ~/.cache/mcp-docs
+```
+
+`search --mode` is `substring` (default) / `prefix` / `fuzzy`; `--kind` is e.g. `struct` / `fn` / `trait`.
 
 ### 7. MCP server
 

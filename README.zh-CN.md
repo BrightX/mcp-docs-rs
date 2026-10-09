@@ -12,7 +12,7 @@
 - **直接解析 rustdoc HTML**：基于 `scraper`（html5ever）解析 `cargo doc` 产物，**不用 rustdoc JSON**（至今 unstable），无需 nightly 或 `RUSTC_BOOTSTRAP`；仅依赖长期稳定的结构不变量，跨 rustdoc 版本健壮。
 - **只认本地、不联网**：数据源仅本地 `target/doc`，不接 docs.rs。
 - **按条目切分**：每个 struct / trait / fn / 方法 / 变体 / 字段都是独立条目，成员默认既独立落盘、又内联进父条目。
-- **两级产物**：`index.json`（轻量摘要，Agent 首读）+ 按条目落盘的 markdown 正文。
+- **两级产物**：`index.json.gz`（轻量摘要，Agent 首读）+ 按条目落盘的 markdown 正文。
 - **降噪**：剥离 UI 噪声（`copy-path`、侧栏、锚点）与 `blanket` / `synthetic` impl 区块；代码块统一补 ```rust 围栏；`htmd` 负责 HTML→Markdown。
 - **可检索**：名字 / 路径 / 摘要的子串、前缀、模糊匹配，多词 AND，按 crate 与类型过滤并按相关度排序。
 - **增量与缓存**：基于产物指纹与文件 mtime 只重建变化项；正文按需解析并带 LRU 缓存。
@@ -38,7 +38,7 @@
 
 ### 三、索引与检索
 
-- **扁平索引 `index.json`**：每个条目的 id / kind / 路径 / 一行摘要 / 文件位置 / 源码位置，Agent 首读。
+- **扁平索引 `index.json.gz`**：每个条目的 id / kind / 路径 / 一行摘要 / 文件位置 / 源码位置，Agent 首读。
 - **匹配模式**：子串、前缀、模糊（子序列）；支持**多词 AND**（各词得分之和）。
 - **过滤与排序**：按 crate、kind 过滤；排序按精确名 > 前缀 > 路径命中 > 描述命中打分，摘要命中附带 snippet。
 - **分页**：`limit` / `offset`，并返回分页前的 `total`。
@@ -47,7 +47,7 @@
 
 - **指纹判定**：`file_count` / `max_mtime` / `size_sum` / `crates.js` 哈希 + rustdoc 版本 + schema 版本，任一变化即重建。
 - **增量导出**：`--incremental` 按 `src_mtime` 逐文件比对，仅重建变化项。
-- **两级缓存**：启动毫秒级加载已有 `index.json`；`get_item` 时才解析正文，`Arc<DocItem>` + LRU（默认 512）。
+- **两级缓存**：启动毫秒级加载已有 `index.json.gz`；`get_item` 时才解析正文，`Arc<DocItem>` + LRU（默认 512）。
 - **并行构建**：`rayon` 并行解析与落盘；CPU 密集任务在 `spawn_blocking` 中执行，不阻塞异步执行器。
 
 ### 五、多项目与跨项目共享索引库
@@ -61,10 +61,34 @@
 |---|---|
 | `mcp-docs tree` | 打印条目树（调试用） |
 | `mcp-docs show <id>` | 解析并打印单个条目 |
-| `mcp-docs export [--incremental] [--crate NAME] [--granularity member\|item]` | 导出 markdown + `index.json` + `meta.json` |
+| `mcp-docs export [--incremental] [--crate NAME] [--granularity member\|item]` | 导出 markdown + `index.json.gz` + `meta.json` |
 | `mcp-docs search <query> [--limit] [--offset] [--mode] [--crate] [--kind]` | 检索条目 |
 
 全局参数：`--doc-dir`（默认 `target/doc`）、`--out`（默认 `target/doc-search`）、`--store`（共享索引库，默认平台缓存目录）。
+
+使用示例（仓库内用 `cargo run -p mcp-docs-cli --`，安装后直接用 `mcp-docs`）：
+
+```bash
+# 导出：读 target/doc → 写 target/doc-search
+cargo run -p mcp-docs-cli -- export
+
+# 增量导出；只处理指定 crate；成员单独落盘
+cargo run -p mcp-docs-cli -- export --incremental --crate tokio --granularity member
+
+# 检索：限定 crate / 类型，前缀模式，分页
+cargo run -p mcp-docs-cli -- search "spawn" --crate tokio --limit 5
+cargo run -p mcp-docs-cli -- search "Timeout" --kind struct --mode prefix --offset 20
+
+# 打印单个条目 / 条目树（调试）
+cargo run -p mcp-docs-cli -- show tokio::task::spawn
+cargo run -p mcp-docs-cli -- tree
+
+# 自定义产物目录与共享库位置（全局参数可放在子命令之后）
+cargo run -p mcp-docs-cli -- export \
+  --doc-dir /repo/target/doc --out /repo/target/doc-search --store ~/.cache/mcp-docs
+```
+
+`search` 的 `--mode` 取 `substring`（默认）/ `prefix` / `fuzzy`；`--kind` 如 `struct` / `fn` / `trait`。
 
 ### 七、MCP 服务
 
