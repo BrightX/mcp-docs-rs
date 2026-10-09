@@ -142,4 +142,4 @@ cargo run -p mcp-docs-cli -- show "tokio::task::fn.spawn"
 cargo run -p mcp-docs-cli -- tree
 ```
 
-要点：CLI 与 MCP 共享同一份 `index.json`；`export` 负责落盘 markdown 与索引。全局参数 `--doc-dir`（默认 `target/doc`）、`--out`（默认 `target/doc-search`）、`--store`（共享索引库，默认平台缓存目录）。
+要点：CLI 与 MCP 共享同一份 `index.json.gz`；`export` 负责落盘 markdown 与索引。全局参数 `--doc-dir`（默认 `target/doc`）、`--out`（默认 `target/doc-search`）、`--store`（共享索引库，默认平台缓存目录）。

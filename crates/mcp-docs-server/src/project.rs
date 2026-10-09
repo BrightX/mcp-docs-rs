@@ -405,7 +405,7 @@ impl Project {
         let doc_dir = Arc::new(doc_dir);
         let out_dir = Arc::new(out_dir);
 
-        let loaded = load_index(&out_dir.join("index.json")).ok();
+        let loaded = load_index(&out_dir.join(mcp_docs_core::INDEX_FILE_NAME)).ok();
         let has_index = loaded.is_some();
         let initial = loaded.unwrap_or_else(|| empty_index(&doc_dir));
         let (ready_tx, ready) = watch::channel(has_index);

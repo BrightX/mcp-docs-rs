@@ -14,7 +14,7 @@ struct Cli {
     #[arg(long, global = true, default_value = "target/doc")]
     doc_dir: PathBuf,
 
-    /// 输出目录（markdown 与 index.json 的落盘根）。
+    /// 输出目录（markdown 与 index.json.gz 的落盘根）。
     #[arg(long, global = true, default_value = "target/doc-search")]
     out: PathBuf,
 
@@ -35,7 +35,7 @@ enum Command {
         /// 条目 id，如 `doc_probe::Demo`。
         id: String,
     },
-    /// 导出所有条目为 markdown 文件树，并生成 index.json。
+    /// 导出所有条目为 markdown 文件树，并生成 index.json.gz。
     Export {
         /// 只导出指定 crate。
         #[arg(long = "crate")]
@@ -203,7 +203,7 @@ fn show(doc_dir: &Path, id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 导出 markdown 文件树，并生成 `index.json` 与 `meta.json`。
+/// 导出 markdown 文件树，并生成 `index.json.gz` 与 `meta.json`。
 fn export(
     doc_dir: &Path,
     out_dir: &Path,
@@ -230,7 +230,7 @@ fn export(
         report.shared_hits,
         report.shared_written,
         report.index.items.len(),
-        out_dir.join("index.json").display()
+        out_dir.join(mcp_docs_core::INDEX_FILE_NAME).display()
     );
     if !report.skipped.is_empty() {
         println!(
@@ -257,7 +257,7 @@ fn run_search(
     kind: Option<&str>,
     store: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let index_path = out_dir.join("index.json");
+    let index_path = out_dir.join(mcp_docs_core::INDEX_FILE_NAME);
     let index = match mcp_docs_core::load_index(&index_path) {
         Ok(index) => index,
         Err(_) => {

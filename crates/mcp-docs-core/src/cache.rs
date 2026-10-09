@@ -33,7 +33,7 @@ pub struct Fingerprint {
 
 /// 落盘的元信息（`meta.json`）。
 ///
-/// 与 `index.json` 分开存放，使「是否需要重建」的判断不必反序列化整个索引。
+/// 与 `index.json.gz` 分开存放，使「是否需要重建」的判断不必反序列化整个索引。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Meta {
     /// 索引结构版本。

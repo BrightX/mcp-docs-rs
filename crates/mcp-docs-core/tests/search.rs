@@ -2,7 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-use mcp_docs_core::{Index, MatchMode, SearchQuery, build_index, search, search_page};
+use mcp_docs_core::{
+    BuildOptions, Granularity, Index, MatchMode, SearchQuery, build_index, load_index, search,
+    search_page, write_index,
+};
 
 /// fixture 根目录，等价于一个 `target/doc`。
 fn fixture_root() -> PathBuf {
@@ -106,9 +109,70 @@ fn crate_and_kind_filters_apply() {
 #[test]
 fn index_json_roundtrips() {
     let index = build();
-    let json = serde_json::to_string(&index).unwrap();
-    let restored: Index = serde_json::from_str(&json).unwrap();
+    let restored = write_then_load(&index);
     assert_eq!(index, restored);
+}
+
+/// 写盘再读回：落盘为 gzip，`path` / `name` / `parent_id` / `file` 加载后重建。
+fn write_then_load(index: &Index) -> Index {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.json.gz");
+    write_index(index, &path).unwrap();
+    load_index(&path).unwrap()
+}
+
+/// 索引文件应为 gzip 压缩（魔数 `1f 8b`），而非明文 JSON。
+#[test]
+fn index_file_is_gzip_compressed() {
+    let index = build();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.json.gz");
+    write_index(&index, &path).unwrap();
+
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(&bytes[..2], &[0x1f, 0x8b], "索引应以 gzip 魔数开头");
+    assert_eq!(load_index(&path).unwrap(), index);
+}
+
+/// 成员派生字段在加载后重建正确（`Item` 粒度下成员 `file` 指向父文件）。
+#[test]
+fn load_rebuilds_member_derived_fields() {
+    let opts = BuildOptions {
+        granularity: Granularity::Item,
+        ..Default::default()
+    };
+    let index = mcp_docs_core::build(&fixture_root(), Path::new("out"), &opts)
+        .unwrap()
+        .index;
+    let restored = write_then_load(&index);
+    assert_eq!(index, restored);
+
+    let member = restored
+        .items
+        .iter()
+        .find(|item| item.id.0 == "doc_probe::struct.Demo::method.new")
+        .expect("应有成员 method.new");
+    assert!(member.kind.is_member());
+    assert_eq!(member.name, "new");
+    assert_eq!(
+        member.path,
+        vec!["doc_probe".to_string(), "Demo".to_string()]
+    );
+    assert_eq!(member.parent_id.as_deref(), Some("doc_probe::struct.Demo"));
+    // Item 粒度：成员不单独落盘，`file` 指向父条目文件。
+    assert_eq!(member.file, "doc_probe/struct.Demo.md");
+
+    // Member 粒度：成员单独落盘。
+    let member_index =
+        mcp_docs_core::build(&fixture_root(), Path::new("out"), &BuildOptions::default())
+            .unwrap()
+            .index;
+    let member_member = write_then_load(&member_index)
+        .items
+        .into_iter()
+        .find(|item| item.id.0 == "doc_probe::struct.Demo::method.new")
+        .unwrap();
+    assert_eq!(member_member.file, "doc_probe/struct.Demo.method.new.md");
 }
 
 /// 查询词 `e` 的命中 id 列表（不截断）。

@@ -1,4 +1,4 @@
-//! 构建索引，并可选地渲染 markdown、落盘 index.json 与 meta.json。
+//! 构建索引，并可选地渲染 markdown、落盘 index.json.gz 与 meta.json。
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 use rayon::prelude::*;
 
 use crate::cache::{Meta, fingerprint_doc_root, path_mtime, write_meta};
+use crate::codec;
 use crate::discover;
 use crate::error::Result;
 use crate::markdown::{LinkStyle, RenderOptions, render_item, render_member_item, rewrite_links};
@@ -16,7 +17,10 @@ use crate::model::{
 };
 use crate::parse::{self, ParseOptions};
 use crate::shared;
-use crate::store::{atomic_write, atomic_write_fast, item_output_path, member_output_path};
+use crate::store::{atomic_write_fast, item_output_path, member_output_path};
+
+/// 索引落盘文件名（JSON + gzip）。
+pub const INDEX_FILE_NAME: &str = "index.json.gz";
 
 /// 构建选项。
 #[derive(Debug, Clone, Default)]
@@ -25,7 +29,7 @@ pub struct BuildOptions {
     pub write_markdown: bool,
     /// 复用未变化条目（增量）。需要 `out_root/index.json` 存在。
     pub incremental: bool,
-    /// 把 `index.json` 与 `meta.json` 落盘。
+    /// 把 `index.json.gz` 与 `meta.json` 落盘。
     pub persist: bool,
     /// 只处理指定 crate。
     pub crate_filter: Option<String>,
@@ -61,7 +65,7 @@ pub struct BuildReport {
 /// 构建索引。
 ///
 /// `out_root` 用于推导条目的 markdown 路径；`opts.persist` 为真时还会写出
-/// `index.json` 与 `meta.json`。
+/// `index.json.gz` 与 `meta.json`。
 pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<BuildReport> {
     let parse_opts = ParseOptions::default();
     let render_opts = RenderOptions::default();
@@ -70,7 +74,7 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
     // 仅在 schema 与导出粒度都一致时才复用，否则按当前选项全量重建
     // （切换粒度会改变成员的 `file`，且不会补写/删除成员文件）。
     let previous = if opts.incremental {
-        load_index(&out_root.join("index.json"))
+        load_index(&out_root.join(INDEX_FILE_NAME))
             .ok()
             .filter(|index| {
                 index.schema_version == INDEX_SCHEMA_VERSION
@@ -233,7 +237,7 @@ pub fn build(doc_root: &Path, out_root: &Path, opts: &BuildOptions) -> Result<Bu
     };
 
     if opts.persist {
-        write_index(&index, &out_root.join("index.json"))?;
+        write_index(&index, &out_root.join(INDEX_FILE_NAME))?;
         let meta = Meta {
             schema_version: INDEX_SCHEMA_VERSION,
             rustdoc_version: index.rustdoc_version.clone(),
@@ -447,17 +451,21 @@ pub fn build_index(doc_root: &Path, out_root: &Path) -> Result<Index> {
     Ok(build(doc_root, out_root, &BuildOptions::default())?.index)
 }
 
-/// 把索引写入文件（原子写）。
+/// 把索引写入文件（JSON + gzip，原子写）。
+///
+/// 索引动辄数万条目，紧凑 JSON 仍可达数 MB；gzip 后通常降到约 1/10。
 pub fn write_index(index: &Index, path: &Path) -> Result<()> {
-    // 紧凑 JSON：索引动辄数万条目，缩进空白会显著放大文件与解析成本。
-    let json = serde_json::to_vec(index)?;
-    atomic_write(path, &json)
+    codec::write_json_gz(path, index)
 }
 
-/// 从文件读取索引。
+/// 从文件读取索引，并重建不落盘的派生字段。
 pub fn load_index(path: &Path) -> Result<Index> {
-    let bytes = fs::read(path)?;
-    Ok(serde_json::from_slice(&bytes)?)
+    let mut index: Index = codec::read_json_gz(path)?;
+    let granularity = index.granularity;
+    for item in &mut index.items {
+        item.rebuild_derived(granularity);
+    }
+    Ok(index)
 }
 
 /// 取相对 `out_root` 的路径字符串，统一用 `/` 分隔。

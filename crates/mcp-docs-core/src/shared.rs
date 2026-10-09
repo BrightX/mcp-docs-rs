@@ -16,10 +16,14 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::cache::{is_tracked, metadata_mtime};
+use crate::codec;
 use crate::error::Result;
 use crate::model::{Granularity, INDEX_SCHEMA_VERSION, ItemSummary};
 use crate::store::{atomic_write, encode_fs_name};
 use crate::{fnv1a, parse};
+
+/// 共享库条目落盘文件名（JSON + gzip）。
+const ITEMS_FILE_NAME: &str = "items.json.gz.gz";
 
 /// 一个 crate 的 stat 级指纹：只 stat、不读内容。
 ///
@@ -206,13 +210,12 @@ pub fn plan(
     })
 }
 
-/// 把构建好的 crate 条目写入共享库（`items.json` + `meta.json`，meta 最后写）。
+/// 把构建好的 crate 条目写入共享库（`items.json.gz` + `meta.json`，meta 最后写）。
 pub fn write_entry(store_root: &Path, plan: &CratePlan, items: &[ItemSummary]) -> Result<()> {
     let dir = entry_dir(store_root, &plan.key);
     fs::create_dir_all(&dir)?;
 
-    let items_bytes = serde_json::to_vec(items)?;
-    atomic_write(&dir.join("items.json"), &items_bytes)?;
+    codec::write_json_gz(&dir.join(ITEMS_FILE_NAME), &items)?;
 
     // meta.json 最后写：它存在即代表该条目已完整可复用。
     let mut meta = plan.meta.clone();
@@ -279,7 +282,7 @@ fn crate_identity(doc_root: &Path, crate_name: &str) -> (String, String) {
 
 /// 命中判定：读取共享库条目并校验元信息一致。
 ///
-/// 未命中（`meta.json`/`items.json` 缺失、schema 或任一身份字段不符）返回 `None`。
+/// 未命中（`meta.json`/`items.json.gz` 缺失、schema 或任一身份字段不符）返回 `None`。
 fn load_reused(
     store_root: &Path,
     key: &str,
@@ -305,15 +308,14 @@ fn load_reused(
         return Ok(None);
     }
 
-    let Ok(bytes) = fs::read(dir.join("items.json")) else {
-        return Ok(None);
-    };
     // 条目损坏（半成品/格式不符）时降级为未命中，交由调用方重建。
-    let Ok(mut items) = serde_json::from_slice::<Vec<ItemSummary>>(&bytes) else {
+    let Ok(mut items) = codec::read_json_gz::<Vec<ItemSummary>>(&dir.join(ITEMS_FILE_NAME)) else {
         return Ok(None);
     };
-    // 用本项目 mtime 回填，否则本项目后续 `--incremental` 永远判定为变化。
+    // 派生字段不落盘，先按粒度重建；再用本项目 mtime 回填，
+    // 否则本项目后续 `--incremental` 永远判定为变化。
     for item in &mut items {
+        item.rebuild_derived(expected.granularity);
         if let Some(mtime) = mtimes.get(&item.html_path) {
             item.src_mtime = Some(*mtime);
         }

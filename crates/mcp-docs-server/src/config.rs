@@ -30,7 +30,7 @@ pub struct ProjectConfig {
     pub name: String,
     /// rustdoc 产物目录。
     pub doc_dir: PathBuf,
-    /// 输出目录（`index.json` / `meta.json` 的落盘根）。
+    /// 输出目录（`index.json.gz` / `meta.json` 的落盘根）。
     pub out_dir: PathBuf,
 }
 
@@ -85,7 +85,9 @@ impl Args {
             projects,
             projects_file: non_empty(env::PROJECTS_FILE).map(PathBuf::from),
             store: non_empty(env::STORE).map(PathBuf::from),
-            no_store: lookup(env::NO_STORE).map(|value| parse_bool(&value)).unwrap_or(false),
+            no_store: lookup(env::NO_STORE)
+                .map(|value| parse_bool(&value))
+                .unwrap_or(false),
             default_project: non_empty(env::DEFAULT_PROJECT),
         })
     }
@@ -306,7 +308,10 @@ mod tests {
     fn no_store_disables_shared_store() {
         let args = args_from(&[(env::DOC_DIR, "target/doc"), (env::NO_STORE, "1")]);
         let cfg = resolve_config(&args).unwrap();
-        assert!(cfg.store.is_none(), "设置 MCP_DOCS_NO_STORE 时不应启用共享库");
+        assert!(
+            cfg.store.is_none(),
+            "设置 MCP_DOCS_NO_STORE 时不应启用共享库"
+        );
     }
 
     /// 未设置 `MCP_DOCS_STORE` 时默认回落到平台缓存目录（平台无缓存目录时除外）。

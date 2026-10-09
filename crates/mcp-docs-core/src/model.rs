@@ -1,6 +1,6 @@
 //! 领域模型：条目类型、条目 id，以及发现阶段的条目。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -130,7 +130,7 @@ impl ItemKind {
     /// 与自然名单数（`function` / `method` / `field`），
     /// 便于 MCP 工具的 `kind` 参数按直觉传值。
     ///
-    /// 自然名走 serde 反序列化，与 `index.json` 里的 `kind` 字段保持同源，
+    /// 自然名走 serde 反序列化，与 `index.json.gz` 里的 `kind` 字段保持同源，
     /// 避免再维护一份映射表。
     pub fn parse_input(input: &str) -> Option<Self> {
         let key = input.trim().to_ascii_lowercase();
@@ -275,9 +275,11 @@ pub struct ItemSummary {
     pub id: ItemId,
     /// 条目类型。
     pub kind: ItemKind,
-    /// 条目名（不含路径）。
+    /// 条目名（不含路径）。序列化省略，加载后由 [`ItemSummary::rebuild_derived`] 从 `id` 重建。
+    #[serde(default, skip_serializing)]
     pub name: String,
-    /// 完整路径（含 crate，不含自身）。
+    /// 完整路径（含 crate，不含自身）。序列化省略，加载后由 [`ItemSummary::rebuild_derived`] 从 `id` 重建。
+    #[serde(default, skip_serializing)]
     pub path: Vec<String>,
     /// 一行摘要（页面 meta，成员取文档首行）。
     pub one_line: String,
@@ -288,17 +290,66 @@ pub struct ItemSummary {
     pub has_docs: bool,
     /// 是否有成员。
     pub has_members: bool,
-    /// 相对输出根目录的 markdown 路径，统一以 `/` 分隔。
+    /// 相对输出根目录的 markdown 路径，统一以 `/` 分隔。序列化省略，加载后由 [`ItemSummary::rebuild_derived`] 重建。
+    #[serde(default, skip_serializing)]
     pub file: String,
     /// 相对 `doc_root` 的源 HTML 路径，统一以 `/` 分隔。
     #[serde(default)]
     pub html_path: String,
-    /// 成员条目所属父条目的 id（非成员为 `None`）。
-    #[serde(default)]
+    /// 成员条目所属父条目的 id（非成员为 `None`）。序列化省略，加载后由 [`ItemSummary::rebuild_derived`] 重建。
+    #[serde(default, skip_serializing)]
     pub parent_id: Option<String>,
     /// 源 HTML 的修改时间（Unix 毫秒），用于增量判断。
     #[serde(default)]
     pub src_mtime: Option<u64>,
+}
+
+impl ItemSummary {
+    /// 重建被序列化省略的派生字段：`path` / `name` / `parent_id` / `file`。
+    ///
+    /// 这些字段都能由 `id` / `kind` / `html_path` 推导，落盘时省略以缩小索引；
+    /// 反序列化后必须调用本方法补齐，否则检索与读取正文会拿到空值。
+    pub(crate) fn rebuild_derived(&mut self, granularity: Granularity) {
+        // 末段形如 `{kind_tag}.{name}`，其余各段是路径（逐段去 kind_tag）。
+        let segments: Vec<&str> = self.id.0.split("::").collect();
+        let (last, parents) = match segments.split_last() {
+            Some((last, parents)) => (*last, parents),
+            None => ("", &[] as &[&str]),
+        };
+        self.name = strip_kind_tag(last).to_string();
+        self.path = parents
+            .iter()
+            .map(|segment| strip_kind_tag(segment).to_string())
+            .collect();
+        self.parent_id = if self.kind.is_member() {
+            self.id
+                .0
+                .rsplit_once("::")
+                .map(|(parent, _)| parent.to_string())
+        } else {
+            None
+        };
+        self.file = derived_file(&self.html_path, self.kind, &self.name, granularity);
+    }
+}
+
+/// 去掉段落里的 `{kind_tag}.` 前缀；无前缀（如 crate 段）原样返回。
+fn strip_kind_tag(segment: &str) -> &str {
+    segment
+        .split_once('.')
+        .map(|(_, name)| name)
+        .unwrap_or(segment)
+}
+
+/// 由 `html_path` 推导条目的 markdown 相对路径（与构建期 [`crate::store`] 同源）。
+fn derived_file(html_path: &str, kind: ItemKind, name: &str, granularity: Granularity) -> String {
+    let html_rel = Path::new(html_path);
+    let path = if kind.is_member() && granularity == Granularity::Member {
+        crate::store::member_output_path(Path::new(""), html_rel, kind, name)
+    } else {
+        crate::store::item_output_path(Path::new(""), html_rel)
+    };
+    path.to_string_lossy().replace('\\', "/")
 }
 
 /// crate 摘要。
@@ -356,4 +407,6 @@ pub struct Index {
 /// - 4：无真实文档的条目不再返回 rustdoc 占位摘要。
 /// - 5：新增导出粒度 `granularity`；发现阶段启用 `all.html` 交叉校验兜底。
 /// - 6：`ItemSummary` 新增 `signature`，供 `find_by_signature` 按签名检索。
-pub const INDEX_SCHEMA_VERSION: u32 = 7;
+/// - 8：索引落盘改为 gzip；`ItemSummary` 的 `path` / `name` / `parent_id` / `file`
+///   改为序列化时省略、加载后由 `id` 重建。
+pub const INDEX_SCHEMA_VERSION: u32 = 8;

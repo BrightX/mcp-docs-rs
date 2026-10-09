@@ -4,6 +4,7 @@
 
 mod allpage;
 mod cache;
+mod codec;
 mod discover;
 mod error;
 mod index;
@@ -24,7 +25,9 @@ pub use cache::{
 };
 pub use discover::{discover_all, discover_crate, list_crates};
 pub use error::{Error, Result};
-pub use index::{BuildOptions, BuildReport, build, build_index, load_index, write_index};
+pub use index::{
+    BuildOptions, BuildReport, INDEX_FILE_NAME, build, build_index, load_index, write_index,
+};
 pub use link::{Resolved, html_to_md_relpath, resolve_href};
 pub use lookup::IdIndex;
 pub use markdown::{

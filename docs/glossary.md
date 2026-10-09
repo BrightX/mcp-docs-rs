@@ -67,7 +67,7 @@
 | #3.8 | 渲染、render | 把条目转成 markdown | `crates/mcp-docs-core/src/markdown.rs` |
 | #3.9 | 链接重写、LinkStyle | 链接输出风格（相对路径 / 纯文本 / 原样） | `crates/mcp-docs-core/src/markdown.rs`；归类 `link.rs` |
 | #3.10 | 导出、export | 批量落盘 markdown 文件树 | CLI `mcp-docs export`；`store.rs` |
-| #3.11 | 索引模块 | 构建 / 读写 `index.json` | `crates/mcp-docs-core/src/index.rs` |
+| #3.11 | 索引模块 | 构建 / 读写 `index.json.gz` | `crates/mcp-docs-core/src/index.rs` |
 | #3.12 | 检索模块 | 检索与排序 | `crates/mcp-docs-core/src/search.rs` |
 | #3.13 | 缓存模块 | 指纹、meta、解析缓存 | `crates/mcp-docs-core/src/cache.rs` |
 | #3.14 | server 模块 | MCP 工具与资源实现 | `crates/mcp-docs-server/src/server.rs` |
@@ -94,3 +94,4 @@
 | #3.35 | 项目清单、list_projects | 列出全部项目及就绪状态（不阻塞） | `server.rs::list_projects` |
 | #3.36 | 启动配置 | 多项目启动配置解析（`MCP_DOCS_PROJECTS` / `MCP_DOCS_PROJECTS_FILE` / `MCP_DOCS_STORE` 等环境变量） | `crates/mcp-docs-server/src/config.rs::resolve_config` |
 | #3.37 | 共享构建锁 | 串行化各项目全量构建，避免并发抢占资源 | `server.rs::from_projects`（`build_lock`）；`project.rs::refresh_index` |
+| #3.38 | 落盘编码 | 索引类文件（`index.json.gz` / `items.json.gz`）落盘为 JSON + gzip；派生字段不落盘、加载后重建 | `crates/mcp-docs-core/src/codec.rs`；`model.rs::ItemSummary::rebuild_derived` |

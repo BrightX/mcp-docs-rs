@@ -64,7 +64,7 @@ d:\RustProjects\mcp-docs-rs\
 │   │   │   ├── parse.rs               # 单 HTML → DocItem（DOM 解析核心）
 │   │   │   ├── markdown.rs            # DocItem → markdown（含降噪）
 │   │   │   ├── link.rs                # 相对链接解析/重写
-│   │   │   ├── index.rs               # index.json 构建/读写
+│   │   │   ├── index.rs               # index.json.gz 构建/读写
 │   │   │   ├── store.rs               # 磁盘布局、原子写、文件名编码
 │   │   │   ├── cache.rs               # 指纹 + 内存缓存 + 增量
 │   │   │   ├── shared.rs              # 跨项目共享索引库（身份键 / 复用 / 物化）
@@ -248,7 +248,7 @@ pub fn rank(item: &ItemSummary, q: &str) -> i32;   // 精确名 > 前缀 > path 
 
 ```
 target/doc-search/                       # 默认；CLI --out / server 参数可覆盖
-├── index.json                           # 全局扁平索引（Agent 首读）
+├── index.json.gz                        # 全局扁平索引（JSON + gzip；Agent 首读）
 ├── meta.json                            # 仅指纹/版本/时间（判定重建无需反序列化大 index）
 └── doc_probe/
     ├── index.md                         # crate 首页
@@ -260,10 +260,16 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
     └── inner/{ index.md, struct.Nested.md }
 ```
 
+**落盘编码**
+
+- 索引类文件（`index.json.gz`、共享库 `items.json.gz`）落盘为 **JSON + gzip**（flate2，纯 Rust backend），体积降到约 1/10；文件名带 `.gz` 后缀，加载时自动解压。落盘辅助在 `codec.rs`（`write_json_gz` / `read_json_gz`）。
+- `ItemSummary` 的 `path` / `name` / `parent_id` / `file` **不落盘**：它们都能由 `id` / `kind` / `html_path` / `granularity` 推导，加载后由 `ItemSummary::rebuild_derived` 重建（见下方契约示例）。字段裁剪与压缩叠加，现网 1.9 万条目从约 9.9 MB 降到约 0.7 MB。
+- `meta.json` 保持明文：体积小，且过期判定要快速读、无需解压。
+
 **命名规则（Windows 安全是硬约束）**
 
 - 顶层 = `{kind_prefix}.{Name}.md`；成员 = 父文件名去 `.md` + `.` + `member_name` + `.md`。
-- **文件名禁用 `:`** → `Demo::new` 落盘为 `struct.Demo.new.md`；`::` 只留在 `index.json` 的 `id` 里。
+- **文件名禁用 `:`** → `Demo::new` 落盘为 `struct.Demo.new.md`；`::` 只留在 `index.json.gz` 的 `id` 里。
 - `encode_fs_name()`：清洗 `< > : " / \ | ? *` → `_`；Windows 保留名（`CON/PRN/AUX/NUL/COM1…`）加 `_` 前缀；去尾部 `.` / 空格；泛型名（`Foo<Bar>`）超 200 字节时 `name-hash8` 截断；冲突时加成员 kind 前缀兜底。
 - 写盘一律 `tmp → rename` 原子替换，避免 Agent 读到半截文件。
 
@@ -273,32 +279,30 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 - `item`：只写顶层条目文件，成员仅内联在父文件里；成员摘要的 `file` **指向父条目文件**（当前 `ItemSummary` 无 `anchor` 字段，不做深链）。
 - 索引记录 `granularity`；增量构建在 schema 或粒度变化时全量重建（否则会复用 `file` 不一致的旧摘要，且不补写成员文件）。
 
-**index.json 契约示例**
+**index.json.gz 契约示例**
+
+落盘为 **JSON + gzip**（文件名 `index.json.gz`，内容以 gzip 魔数 `1f 8b` 开头）。下列为**解压后**的逻辑结构，已省略不落盘的派生字段：
 
 ```json
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "rustdoc_version": "1.98.1 (48a229cea 2026-09-01)",
   "generated_at": 1790853560,
   "target_doc": "D:\\RustProjects\\mcp-docs-rs\\target\\doc",
   "granularity": "member",
   "crates": [{ "name": "doc_probe", "item_count": 11 }],
   "items": [
-    { "id": "doc_probe::struct.Demo", "kind": "struct", "name": "Demo",
-      "path": ["doc_probe"], "one_line": "A demo struct.", "has_docs": true,
-      "has_members": true, "file": "doc_probe/struct.Demo.md",
-      "html_path": "doc_probe/struct.Demo.html", "parent_id": null, "src_mtime": 1790853560614 },
-    { "id": "doc_probe::struct.Demo::method.new", "kind": "method", "name": "new",
-      "path": ["doc_probe", "Demo"], "one_line": "build a demo",
-      "has_docs": true, "has_members": false,
-      "file": "doc_probe/struct.Demo.method.new.md",
-      "html_path": "doc_probe/struct.Demo.html", "parent_id": "doc_probe::struct.Demo",
-      "src_mtime": 1790853560614 }
+    { "id": "doc_probe::struct.Demo", "kind": "struct",
+      "one_line": "A demo struct.", "has_docs": true, "has_members": true,
+      "html_path": "doc_probe/struct.Demo.html", "src_mtime": 1790853560614 },
+    { "id": "doc_probe::struct.Demo::method.new", "kind": "method",
+      "one_line": "build a demo", "has_docs": true, "has_members": false,
+      "html_path": "doc_probe/struct.Demo.html", "src_mtime": 1790853560614 }
   ]
 }
 ```
 
-> 产物指纹与 schema 版本另存于 `meta.json`（判定重建时无需反序列化大 index）。
+> `path` / `name` / `parent_id` / `file` 不落盘，加载后由 `id`（+ `kind` / `html_path` / `granularity`）重建；`signature` 保留（供 `find_by_signature`）。产物指纹与 schema 版本另存于 `meta.json`（判定重建时无需反序列化大 index）。
 
 **跨项目共享索引库（M11）**
 
@@ -309,7 +313,7 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 └── shared/
     └── <key_dir>/                     # key = {crate}-{version}-{hash8}
         ├── meta.json                  # 身份字段 + schema + 时间（最后写；缺它视为半成品）
-        ├── items.json                 # 该 crate 的 Vec<ItemSummary>
+        ├── items.json.gz              # 该 crate 的 Vec<ItemSummary>（JSON + gzip）
         └── md/<crate>/...             # 渲染的 md，与项目 out_root/<crate>/ 逐字符同构
 ```
 
@@ -323,13 +327,13 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 
 ## 7. 缓存策略
 
-- **一级（启动即建，毫秒级）**：已落盘 `index.json` → 直接 `serde_json` 加载。首次构建时只读 `crates.js` + 各 `sidebar-items.js`，再对每个 html **只读文件头抓 `<meta name=description>` 与 `data-rustdoc-version`**（不建 DOM）得到一行摘要。
+- **一级（启动即建，毫秒级）**：已落盘 `index.json.gz` → gunzip + `serde_json` 加载，并重建不落盘的派生字段。首次构建时只读 `crates.js` + 各 `sidebar-items.js`，再对每个 html **只读文件头抓 `<meta name=description>` 与 `data-rustdoc-version`**（不建 DOM）得到一行摘要。
 - **二级（按需）**：`get_item` 时才建 DOM、抽 section/members、渲染 md；结果进内存缓存（`Arc<DocItem>` + LRU 上限，如 512）。
 - **指纹**：`Fingerprint{ file_count, max_mtime, size_sum, crates_js_hash }`，一次 `walkdir` 只 stat 不读内容，复杂度 O(文件数)。
 - **stale 判定**：fingerprint 不等 **或** 页面 `data-rustdoc-version` 变化 **或** `schema_version` 变化 → 重建。默认全量重建索引（很快）；`--incremental` 时按 `src_mtime` 逐文件比对，仅更新变化项。
 - CPU 密集的解析/渲染在 async handler 中用 `tokio::task::spawn_blocking` 包裹。
 
-**启动与就绪（不阻塞 `initialize`）**：server 构造时只同步加载已有 `index.json`（毫秒~亚秒级）即开始服务；索引的过期判定与重建交给后台任务，避免冷启动（首次全量构建可能需 1~2 分钟）拖住 `initialize`。工具与资源在访问索引前等待「就绪」信号（`ensure_ready`）：有旧索引则先服务、后台再刷新；完全没有索引时用空占位并等待构建完成。
+**启动与就绪（不阻塞 `initialize`）**：server 构造时只同步加载已有 `index.json.gz`（毫秒~亚秒级）即开始服务；索引的过期判定与重建交给后台任务，避免冷启动（首次全量构建可能需 1~2 分钟）拖住 `initialize`。工具与资源在访问索引前等待「就绪」信号（`ensure_ready`）：有旧索引则先服务、后台再刷新；完全没有索引时用空占位并等待构建完成。
 
 **多项目就绪（M11）**：每个项目有自己的 `ready` 与 `DocCache`。缺省项目在启动时 eager 构建；其余项目**懒启动**——首次被工具/资源访问时才启动后台构建。所有项目的构建共用一把 `build_lock` 串行执行，避免并发跑 rayon 抢占资源、叠加内存峰值。
 
@@ -372,7 +376,7 @@ target/doc-search/                       # 默认；CLI --out / server 参数可
 ## 9. CLI
 
 ```
-mcp-docs export [--out DIR] [--doc-dir target/doc] [--incremental] [--granularity member|item]  # 导出 md + index.json
+mcp-docs export [--out DIR] [--doc-dir target/doc] [--incremental] [--granularity member|item]  # 导出 md + index.json.gz
 mcp-docs tree   [--doc-dir target/doc]                               # 打印条目树（调试）
 mcp-docs show   <id> [--doc-dir target/doc]                          # 打印单条目 markdown
 mcp-docs search <query> [--crate X] [--limit N] [--offset N]         # 检索（可分页）
@@ -395,7 +399,7 @@ fixture：把 `temp/doc_probe/target/doc` 裁剪（剔除 `static.files/`、`sea
    - `cache::fingerprint`：两次相等；改 mtime 后不等。
    - `search`：`"new"` 命中 `Demo::new`；`"demo"` 命中 `Demo` 且排序合理。
 2. **golden/snapshot（`insta`）**：`struct.Demo.md` 快照，断言无 "Copy item path"、无 blanket/synthetic impls、含 ```rust 围栏。
-3. **CLI 集成（`assert_cmd` + `predicates` + `tempfile`）**：`export --out <tmp>` 后断言文件树与 `index.json` 可解析、条目数正确。
+3. **CLI 集成（`assert_cmd` + `predicates` + `tempfile`）**：`export --out <tmp>` 后断言文件树与 `index.json.gz` 可解析、条目数正确。
 4. **MCP 集成**：rmcp client 经内存双工 transport 调 `search_items` / `get_item` / `read_resource`。
 5. **可选 e2e（`#[ignore]`）**：临时建最小 crate → `cargo doc --no-deps` → 全流程，作为「新版 rustdoc 结构变化」的哨兵。
 6. **健壮性**：`parse_item_html` 喂截断/畸形 HTML，断言不 panic。

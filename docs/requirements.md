@@ -25,7 +25,7 @@ Agent 需要知道 `tokio::spawn` 的签名与用法 →
 对感兴趣的条目逐个 `get_item`。
 
 **场景 3：开发者批量导出**
-开发者在脚本或编辑器里跑 `mcp-docs export`，把 `target/doc` 转成 `target/doc-search/` 下的 markdown 树 + `index.json`，供 Grep / Read 等工具直接检索。
+开发者在脚本或编辑器里跑 `mcp-docs export`，把 `target/doc` 转成 `target/doc-search/` 下的 markdown 树 + `index.json.gz`，供 Grep / Read 等工具直接检索。
 
 ## 功能需求
 
@@ -35,7 +35,7 @@ Agent 需要知道 `tokio::spawn` 的签名与用法 →
 | F2 | 解析单个条目 | 提取标题、签名（`pre.rust.item-decl`）、主文档、各分节、方法/字段/变体/关联项等成员 |
 | F3 | 成员条目化 | 方法、变体、字段等成员成为可检索的独立条目（id 形如 `crate::Type::method`） |
 | F4 | 渲染 markdown | 剥离 rustdoc UI 与噪声区块；代码示例用 ```rust 围栏；重写相对链接 |
-| F5 | 建立索引 | 生成扁平 `index.json`，含每个条目的 id/kind/path/一行摘要/文件位置 |
+| F5 | 建立索引 | 生成扁平 `index.json.gz`，含每个条目的 id/kind/path/一行摘要/文件位置 |
 | F6 | 检索 | 支持按名字、路径、描述的子串 / 前缀 / 模糊匹配，可按 crate、kind 过滤与排序 |
 | F7 | 按需读取 | 只解析并返回被请求的条目，避免全量加载 |
 | F8 | CLI 导出 | `export` / `tree` / `show` / `search` 子命令 |
