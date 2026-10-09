@@ -143,6 +143,34 @@ fn discovers_all_items_in_fixture() {
             "doc_probe::trait.DoIt",
             "doc_probe::fn.free_fn",
             "doc_probe::inner::struct.Nested",
+            // crate 内部重导出别名（来自 crate 首页 `#reexports`）；同名重导出
+            // `pub use …::Demo;` 与已有真实条目撞 id，被去重跳过。
+            "doc_probe::struct.DemoAlias",
+            "doc_probe::fn.free_fn_alias",
         ]
     );
+}
+
+/// crate 内部重导出别名从首页 `#reexports` 被发现，指向目标的真实页面。
+#[test]
+fn discovers_reexport_aliases_from_index() {
+    let items = discover_crate(&fixture_root(), "doc_probe").unwrap();
+    let alias = items
+        .iter()
+        .find(|item| item.id.0 == "doc_probe::struct.DemoAlias")
+        .expect("应发现别名 doc_probe::struct.DemoAlias");
+    assert_eq!(alias.kind, ItemKind::Struct);
+    assert_eq!(alias.name, "DemoAlias");
+    assert_eq!(alias.path, vec!["doc_probe".to_string()]);
+    // 别名指向目标的真实页面，从而 get_item 能返回目标文档。
+    assert_eq!(
+        alias.html_path,
+        PathBuf::from("doc_probe").join("struct.Demo.html")
+    );
+    // 同名重导出不应产生第二条 `doc_probe::struct.Demo`。
+    let demos = items
+        .iter()
+        .filter(|item| item.id.0 == "doc_probe::struct.Demo")
+        .count();
+    assert_eq!(demos, 1);
 }

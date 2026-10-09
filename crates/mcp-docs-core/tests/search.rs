@@ -20,8 +20,9 @@ fn build() -> Index {
 #[test]
 fn index_contains_items_and_members() {
     let index = build();
-    // 6 个顶层条目 + 5 个成员（Demo 的 field/new、Kind 的 A/B、DoIt 的 run）。
-    assert_eq!(index.items.len(), 11, "{:#?}", index.items);
+    // 6 个顶层条目 + 5 个成员（Demo 的 field/new、Kind 的 A/B、DoIt 的 run）
+    // + 2 个重导出别名（DemoAlias、free_fn_alias）。
+    assert_eq!(index.items.len(), 13, "{:#?}", index.items);
 
     let ids: Vec<&str> = index.items.iter().map(|item| item.id.0.as_str()).collect();
     assert!(ids.contains(&"doc_probe::struct.Demo"));
@@ -29,6 +30,21 @@ fn index_contains_items_and_members() {
     assert!(ids.contains(&"doc_probe::struct.Demo::field.field"));
     assert!(ids.contains(&"doc_probe::enum.Kind::variant.A"));
     assert!(ids.contains(&"doc_probe::inner::struct.Nested"));
+    // 重导出别名：id 用别名，指向目标的真实文件。
+    assert!(ids.contains(&"doc_probe::struct.DemoAlias"));
+}
+
+/// crate 内部重导出别名可被检索命中，且 `file` 指向目标条目文件。
+#[test]
+fn search_finds_reexport_alias() {
+    let index = build();
+    let hits = search(&index, &SearchQuery::new("DemoAlias"));
+    let alias = hits
+        .iter()
+        .find(|hit| hit.item.id.0 == "doc_probe::struct.DemoAlias")
+        .expect("应命中重导出别名 DemoAlias");
+    assert_eq!(alias.score, 100);
+    assert_eq!(alias.item.file, "doc_probe/struct.Demo.md");
 }
 
 #[test]

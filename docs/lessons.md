@@ -201,6 +201,18 @@
 **对**：markdown 标题保留内联代码的反引号（`## When to use \`X\``），而 HTML 标题文本没有；精确比对会切不到正文，`body_md` 静默为空（同页其它无内联代码的分节却正常）。比对前应规整（去反引号）。
 **相关**：`parse.rs::extract_md_section`；issues E-1.3
 
+### #1.31 重导出有两种形态，只有「内部重导出」需要额外发现
+
+**错**：以为 `pub use` 重导出要么都有独立页面、要么都是 `#reexports` 文字。
+**对**：**crate 内部**重导出（`pub use deep::X as Y;`）**不生成页面**，也不进 `sidebar-items.js` / `all.html` / 目录扫描，只在 crate 首页 `#reexports` 区块列出（`dt#reexport.{别名}` + `a[href]`/`a[title]`），必须单独解析才能被检索；**跨 crate** 重导出（`pub use anyhow::Error;`）rustdoc 会生成本地页面、进 sidebar / `all.html`，常规发现已覆盖。只补前者即可。
+**相关**：`crates/mcp-docs-core/src/reexport.rs`；`discover.rs::discover_crate`；design.md §1
+
+### #1.32 共享同一 HTML 的条目，id 不能只从 html_path 推导
+
+**错**：`process_entry` 用 `parse_item_html(html, html_path)` 推导的 `id` 作为 `ItemSummary.id`。
+**对**：重导出别名条目与目标共享同一 `html_path`，解析出的 id 是中目标的 id，导致别名 id 丢失、且与目标条目撞 id（同页被多个条目引用时条目重复）。应以**发现阶段的 `entry.id`/`name`/`path`/`kind` 为准**覆盖。别名条目还不应继承目标成员（成员 id 带目标前缀会重复），也不应重复写盘（与目标同文件、内容相同，并发写会在 Windows 触发 os error 32）。
+**相关**：`crates/mcp-docs-core/src/index.rs::process_entry`（`is_alias`）
+
 ## 2. 文件系统与路径
 
 ### #2.1 文件名绝不能用 `::`

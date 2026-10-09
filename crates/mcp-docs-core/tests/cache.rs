@@ -86,7 +86,39 @@ fn only_changed_page_is_reparsed() {
 
     build(&doc, &out, &full(true)).unwrap();
 
-    // 改动一个页面（内容与 mtime 都变化）。
+    // 改动一个页面（内容与 mtime 都变化）。选 `enum.Kind.html` 而非
+    // `struct.Demo.html`：后者被一个重导出别名引用，改它会连带重解析别名条目，
+    // 无法用 `parsed == 1` 隔离验证增量逻辑。
+    let target = doc.join("doc_probe").join("enum.Kind.html");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let html = fs::read_to_string(&target).unwrap();
+    fs::write(
+        &target,
+        html.replace("A demo enum.", "A changed demo enum."),
+    )
+    .unwrap();
+
+    let incremental = BuildOptions {
+        persist: true,
+        incremental: true,
+        ..Default::default()
+    };
+    let report = build(&doc, &out, &incremental).unwrap();
+    assert_eq!(report.parsed, 1, "应只重新解析被改动的页面");
+    assert!(report.reused > 0);
+}
+
+/// 重导出别名与目标共享同一 HTML：改动该页会连带重解析别名条目。
+#[test]
+fn reexport_alias_reparsed_with_its_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let doc = tmp.path().join("doc");
+    let out = tmp.path().join("out");
+    copy_dir(&fixture_root(), &doc);
+
+    build(&doc, &out, &full(true)).unwrap();
+
+    // `struct.Demo.html` 被 `pub use …::{Demo} as DemoAlias;` 引用。
     let target = doc.join("doc_probe").join("struct.Demo.html");
     std::thread::sleep(std::time::Duration::from_millis(20));
     let html = fs::read_to_string(&target).unwrap();
@@ -102,8 +134,8 @@ fn only_changed_page_is_reparsed() {
         ..Default::default()
     };
     let report = build(&doc, &out, &incremental).unwrap();
-    assert_eq!(report.parsed, 1, "应只重新解析被改动的页面");
-    assert!(report.reused > 0);
+    // 目标条目与引用它的别名条目都会重解析。
+    assert_eq!(report.parsed, 2, "目标页及其别名应一并重解析");
 }
 
 #[test]
@@ -118,14 +150,16 @@ fn granularity_item_skips_member_files() {
     };
     let report = build(&fixture_root(), &out, &opts).unwrap();
 
-    // 只写顶层条目文件，成员不落盘。
-    let tops = report
+    // 只写顶层条目文件，成员不落盘。别名条目与目标共享同一文件、内容相同，
+    // 不重复落盘，故 `written` 等于非成员条目涉及的不同文件数。
+    let tops: std::collections::HashSet<&str> = report
         .index
         .items
         .iter()
         .filter(|item| !item.kind.is_member())
-        .count();
-    assert_eq!(report.written, tops);
+        .map(|item| item.file.as_str())
+        .collect();
+    assert_eq!(report.written, tops.len());
     assert!(!out.join("doc_probe/struct.Demo.method.new.md").exists());
 
     // 成员摘要的 `file` 指向父条目文件。

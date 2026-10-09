@@ -409,4 +409,6 @@ pub struct Index {
 /// - 6：`ItemSummary` 新增 `signature`，供 `find_by_signature` 按签名检索。
 /// - 8：索引落盘改为 gzip；`ItemSummary` 的 `path` / `name` / `parent_id` / `file`
 ///   改为序列化时省略、加载后由 `id` 重建。
-pub const INDEX_SCHEMA_VERSION: u32 = 8;
+/// - 9：发现阶段收录 crate 内部重导出别名（crate 首页 `#reexports` 区块），
+///   别名条目 id 用别名、`html_path` 指向目标真实页。
+pub const INDEX_SCHEMA_VERSION: u32 = 9;

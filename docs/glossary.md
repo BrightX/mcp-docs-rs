@@ -52,6 +52,8 @@
 | #2.9 | `rustdoc-vars` | 页面头部 meta，含 `data-current-crate` / `data-rustdoc-version` | `parse.rs::parse_rustdoc_meta` |
 | #2.10 | 宏条目二元组 | rustdoc 1.98+ 在 sidebar 里把宏写成 `[名字, 标志]` | `sidebar.rs::sidebar_entry_name`（见 `lessons.md` #1.24） |
 | #2.11 | 导出粒度、Granularity | 成员是否单独落盘（`member` 默认 / `item` 仅内联） | `model.rs::Granularity`；`index.rs::BuildOptions` |
+| #2.12 | `#reexports`、重导出区块 | crate 首页列出**内部重导出别名**的区块 | `crates/mcp-docs-core/src/reexport.rs::parse_reexports_str` |
+| #2.13 | 别名条目、重导出别名 | crate 内部重导出补出的条目（id 用别名、`html_path` 指向目标页） | `reexport.rs`；`index.rs::process_entry`（`is_alias`） |
 
 ## 3. 代码位置对照
 
@@ -95,3 +97,4 @@
 | #3.36 | 启动配置 | 多项目启动配置解析（`MCP_DOCS_PROJECTS` / `MCP_DOCS_PROJECTS_FILE` / `MCP_DOCS_STORE` 等环境变量） | `crates/mcp-docs-server/src/config.rs::resolve_config` |
 | #3.37 | 共享构建锁 | 串行化各项目全量构建，避免并发抢占资源 | `server.rs::from_projects`（`build_lock`）；`project.rs::refresh_index` |
 | #3.38 | 落盘编码 | 索引类文件（`index.json.gz` / `items.json.gz`）落盘为 JSON + gzip；派生字段不落盘、加载后重建 | `crates/mcp-docs-core/src/codec.rs`；`model.rs::ItemSummary::rebuild_derived` |
+| #3.39 | reexport 模块 | 解析 crate 首页 `#reexports`，补出内部重导出别名条目 | `crates/mcp-docs-core/src/reexport.rs`；接入 `discover.rs::discover_crate` |

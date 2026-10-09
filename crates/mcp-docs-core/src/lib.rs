@@ -14,6 +14,7 @@ mod markdown;
 mod model;
 mod nav;
 mod parse;
+mod reexport;
 mod search;
 mod shared;
 mod sidebar;
@@ -45,6 +46,7 @@ pub use parse::{
     ParseOptions, extract_source_lines, parse_crate_version, parse_item_html, parse_one_line,
     parse_page_impls, parse_rustdoc_meta, path_to_identity,
 };
+pub use reexport::parse_reexports_str;
 pub use search::{MatchMode, SearchHit, SearchOutcome, SearchQuery, search, search_page};
 pub use shared::{
     CratePlan, CrateStat, StoreMeta, crate_scan, default_store_root, key_dir_name,

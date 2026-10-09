@@ -31,7 +31,7 @@ Agent 需要知道 `tokio::spawn` 的签名与用法 →
 
 | 编号 | 需求 | 说明 |
 |---|---|---|
-| F1 | 发现 crates 与条目 | 从 `crates.js` 与各层 `sidebar-items.js` 递归构建条目清单，`all.html` 作兜底与交叉校验 |
+| F1 | 发现 crates 与条目 | 从 `crates.js` 与各层 `sidebar-items.js` 递归构建条目清单，`all.html` 与 crate 首页 `#reexports` 作兜底与交叉校验（后者补出 crate 内部重导出别名） |
 | F2 | 解析单个条目 | 提取标题、签名（`pre.rust.item-decl`）、主文档、各分节、方法/字段/变体/关联项等成员 |
 | F3 | 成员条目化 | 方法、变体、字段等成员成为可检索的独立条目（id 形如 `crate::Type::method`） |
 | F4 | 渲染 markdown | 剥离 rustdoc UI 与噪声区块；代码示例用 ```rust 围栏；重写相对链接 |

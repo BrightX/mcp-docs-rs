@@ -31,6 +31,21 @@ target/doc/
 - 条目文件前缀：`struct.` / `enum.` / `trait.` / `fn.` / `type.` / `constant.` / `macro.` / `static.` / `union.` / `primitive.`。
 - `all.html`：`<ul class="all-items"><li><a href="struct.Demo.html">Demo</a></li>`，跨模块显示为 `inner::Nested`。
 
+### re-export 的两种形态（实测）
+
+重导出分两类，产物形态**完全不同**：
+
+- **crate 内部重导出**（`pub use deep::RealStruct as Renamed;`）：**不生成独立页面**，也不进 `sidebar-items.js` / `all.html` / 目录扫描；只在 crate 首页列出：
+  ```html
+  <h2 id="reexports" class="section-header">Re-exports</h2>
+  <dl class="item-table reexports">
+    <dt id="reexport.Renamed"><code>pub use deep::<a class="struct"
+       href="deep/struct.RealStruct.html" title="struct rp::deep::RealStruct">RealStruct</a> as Renamed;</code></dt>
+  </dl>
+  ```
+  `dt#reexport.{别名}` 给别名，`a[title]`（`{kind前缀} {目标全路径}`）给目标类型，`a[href]` 给目标真实页。由 `reexport.rs` 补成别名条目（id 用别名、`html_path` 指向目标页），供 `search_items` 命中。
+- **跨 crate 重导出**（`pub use anyhow::Error;`）：rustdoc 生成**本地页面**（`struct.Error.html` 等），进 sidebar / `all.html`，由常规发现路径覆盖，**不进入 `#reexports`**。
+
 ### 页面层（位于 `section#main-content.content` 内）
 
 - `<meta name="rustdoc-vars" data-current-crate="doc_probe" data-rustdoc-version="1.95.0 (59807616e 2026-04-14)" data-root-path="../">` —— crate 名、rustdoc 版本、链接根，**零 DOM 解析即可拿到**。
@@ -60,7 +75,9 @@ d:\RustProjects\mcp-docs-rs\
 │   │   │   ├── error.rs               # thiserror
 │   │   │   ├── config.rs              # DocSearchConfig（doc_root / out_dir / 各种开关）
 │   │   │   ├── sidebar.rs             # sidebar-items.js → BTreeMap<ItemKind, Vec<String>>
-│   │   │   ├── discover.rs            # crates.js + 递归 sidebar → 条目清单（all.html 兜底）
+│   │   │   ├── discover.rs            # crates.js + 递归 sidebar → 条目清单（all.html / reexports 兜底）
+│   │   │   ├── allpage.rs             # 解析 all.html，补全 sidebar 遗漏条目
+│   │   │   ├── reexport.rs            # 解析 crate 首页 #reexports，补全内部重导出别名
 │   │   │   ├── parse.rs               # 单 HTML → DocItem（DOM 解析核心）
 │   │   │   ├── markdown.rs            # DocItem → markdown（含降噪）
 │   │   │   ├── link.rs                # 相对链接解析/重写
@@ -193,6 +210,7 @@ pub fn rank(item: &ItemSummary, q: &str) -> i32;   // 精确名 > 前缀 > path 
 2. `discover_crate`：从 `doc_root/<crate>` 起递归 `walk_module`；每层读 `sidebar-items.js`，`mod` 项下钻子目录，其余按 `{file_prefix}.{name}.html` 产出 `DiscoveredItem{ id = crate::mod::…::name }`。文件缺失记 warning，不 panic。
 3. 兜底：sidebar 缺失时扫描目录下 `^(struct|enum|trait|fn|type|constant|static|macro|union|primitive)\.(.+)\.html$`。
 4. 交叉校验兜底（`allpage.rs`）：解析 `all.html` 的 `ul.all-items a`，把 sidebar 与目录扫描都遗漏的条目按 **`html_path` 去重**后**追加**（保持发现顺序）。`foo!.html` 规整为真实文件 `foo.html`；外链、绝对路径、逃出 crate 的 `..` 跳过。
+5. 重导出兜底（`reexport.rs`）：解析 crate 首页的 `#reexports` 区块，把**crate 内部重导出别名**按 **id 去重**后追加。别名条目 id 用别名、`html_path` 指向目标的真实页面；同名重导出与已发现的真实条目撞 id 时被跳过。
 
 > 用 sidebar 而非只靠 all.html 的原因：sidebar 与目录树同构，能直接确定「这个 html 属于哪个模块」；all.html 的显示路径是 `inner::Nested` 字符串，仍需拆分。两者互补。
 

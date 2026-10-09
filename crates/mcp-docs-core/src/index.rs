@@ -13,7 +13,8 @@ use crate::discover;
 use crate::error::Result;
 use crate::markdown::{LinkStyle, RenderOptions, render_item, render_member_item, rewrite_links};
 use crate::model::{
-    CrateSummary, DiscoveredItem, Granularity, INDEX_SCHEMA_VERSION, Index, ItemSummary,
+    CrateSummary, DiscoveredItem, DocItem, Granularity, INDEX_SCHEMA_VERSION, Index, ItemId,
+    ItemKind, ItemSummary,
 };
 use crate::parse::{self, ParseOptions};
 use crate::shared;
@@ -352,12 +353,43 @@ fn process_entry(
     };
     let parsed = 1;
 
+    // 别名条目（crate 内部重导出）与目标共享同一 HTML，但身份取自发现阶段：
+    // 用别名 id / 名字 / 路径覆盖解析结果，否则会与目标条目撞 id（重复）。
+    // 别名只是指向目标的指针，不继承目标的成员（成员 id 带目标前缀，会重复）。
+    let is_alias = item.id != entry.id;
+    let (summary_id, summary_name, summary_path, summary_kind, members): (
+        ItemId,
+        String,
+        Vec<String>,
+        ItemKind,
+        &[DocItem],
+    ) = if is_alias {
+        (
+            entry.id.clone(),
+            entry.name.clone(),
+            entry.path.clone(),
+            entry.kind,
+            &[],
+        )
+    } else {
+        (
+            item.id.clone(),
+            item.name.clone(),
+            item.path.clone(),
+            item.kind,
+            &item.members,
+        )
+    };
+
     // 相对输出根的路径（共享库与项目目录逐字符同构，故与具体根无关）。
     let item_rel = item_output_path(Path::new(""), &entry.html_path);
     let item_file = rel_to_slash(&item_rel);
 
     // 渲染目标：store 启用时优先写共享库，且恒渲染以保证库内 md 完整可复用。
-    let should_render = opts.write_markdown || store_md_dir.is_some();
+    // 别名条目与目标共享同一 `html_path`、渲染内容也相同，跳过写盘：
+    // 目标条目必然被常规发现产出并写入该文件；避免两个条目并发写同一文件，
+    // 在 Windows 上触发「文件被占用」（os error 32）。
+    let should_render = (opts.write_markdown || store_md_dir.is_some()) && !is_alias;
     let primary = store_md_dir.unwrap_or(out_root);
     let mut written = 0;
     if should_render {
@@ -382,23 +414,23 @@ fn process_entry(
         String::new()
     };
 
-    let mut summaries = Vec::with_capacity(item.members.len() + 1);
+    let mut summaries = Vec::with_capacity(members.len() + 1);
     summaries.push(ItemSummary {
-        id: item.id.clone(),
-        kind: item.kind,
-        name: item.name.clone(),
-        path: item.path.clone(),
+        id: summary_id,
+        kind: summary_kind,
+        name: summary_name,
+        path: summary_path,
         one_line,
         signature: item.signature.clone(),
         has_docs,
-        has_members: !item.members.is_empty(),
+        has_members: !members.is_empty(),
         file: item_file.clone(),
         html_path: rel_string(doc_root, &entry.html_path),
         parent_id: None,
         src_mtime: mtime,
     });
 
-    for member in &item.members {
+    for member in members {
         let member_rel =
             member_output_path(Path::new(""), &entry.html_path, member.kind, &member.name);
         // 成员文件仅在「成员粒度」下写出；条目粒度时只内联在父文件里。

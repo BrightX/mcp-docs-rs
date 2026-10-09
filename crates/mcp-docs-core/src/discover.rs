@@ -50,6 +50,19 @@ pub fn discover_crate(doc_root: &Path, crate_name: &str) -> Result<Vec<Discovere
         }
     }
 
+    // crate 内部重导出别名（`pub use deep::RealStruct as Renamed;`）不生成独立页面，
+    // 只在 crate 首页的 `#reexports` 区块列出，sidebar / all.html / 目录扫描都覆盖不到；
+    // 这里补成别名条目（id 用别名，html_path 指向目标真实页）。
+    if let Ok(html) = fs::read_to_string(doc_root.join(crate_name).join("index.html")) {
+        // 按 id 去重：别名 id 唯一，且可能与本 crate 已有的真实条目同名（同名重导出）。
+        let mut seen: HashSet<String> = out.iter().map(|item| item.id.0.clone()).collect();
+        for item in crate::reexport::parse_reexports_str(&html, crate_name) {
+            if doc_root.join(&item.html_path).is_file() && seen.insert(item.id.0.clone()) {
+                out.push(item);
+            }
+        }
+    }
+
     Ok(out)
 }
 

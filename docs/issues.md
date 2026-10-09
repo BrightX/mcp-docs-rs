@@ -47,6 +47,7 @@
 | [E-3.12](#e-312) | P3 | skill / server instructions 缺参数速查，探测成本高 | ✅ 已修复 |
 | [E-3.13](#e-313) | P3 | `find_by_signature` / `search_docs` 缺 `total` / 翻页信号 | ✅ 已修复 |
 | [E-3.14](#e-314) | P3 | 资源 URI 未命中时无引导（易踩 `io.fn.copy` 404） | ✅ 已修复 |
+| [E-3.15](#e-315) | P2 | `search_items` / `list_items` 命中不到 crate 内部重导出别名 | ✅ 已修复 |
 | [E-4.2](#e-42) | P3 | `Option<T>` 参数生成 `type:[T,"null"]` 联合类型 | ⛔ 不修复 |
 | [E-4.3](#e-43) | P3 | 枚举候选值未暴露为 schema `enum` | ✅ 已修复 |
 | [E-5.1](#e-51) | P3 | 默认写入全局共享库且无上限 / GC | ✅ 已修复 |
@@ -320,6 +321,18 @@ tools/call search_docs {"query":"Demo"}  → 命中
 **修复**：未命中时在错误信息里给出可用写法（`rustdoc://{crate}/{mod}/{Name}` 与带类型标记的 `rustdoc://{crate}/{mod}/{kind}.{Name}`）并指向 `search_items` / `get_item`。
 
 **验证**：错误信息含两种写法示例。
+
+### E-3.15 <a id="e-315"></a>`search_items` / `list_items` 命中不到 crate 内部重导出别名
+
+**现象**：crate 内 `pub use deep::RealStruct as RenamedStruct;` 后，`search_items("RenamedStruct")` 与 `list_items(module=…)` 均为空；别名在索引里完全不存在。
+
+**根因**：crate 内部重导出**不生成独立页面**，也不进 `sidebar-items.js` / `all.html` / 目录扫描，只在 crate 首页 `#reexports` 区块列出；发现阶段从不解析该区块，故别名从不进入索引。
+
+**影响**：Agent 无法按别名检索、无法通过别名获取文档（跨 crate 重导出不受影响，rustdoc 会为其生成本地页面）。
+
+**修复**：新增 `reexport.rs::parse_reexports_str` 解析 crate 首页 `#reexports`，`discover_crate` 补出别名条目（id 用别名、`html_path` 指向目标真实页）；`index.rs::process_entry` 对别名条目以发现身份为准、不继承成员、不重复写盘。递增 `INDEX_SCHEMA_VERSION` 8→9。
+
+**验证**：`tests/discover.rs::discovers_reexport_aliases_from_index`、`tests/search.rs::search_finds_reexport_alias`；实测 `search Renamed` 命中别名、`get_item` 返回目标文档。
 
 ## 4. 协议与可移植性
 
